@@ -35,7 +35,7 @@ export function visionPrompt(tiles: boolean): string {
   return [
     'You read trading screenshots for a futures trading journal.',
     tiles
-      ? 'Image 1 is the whole screenshot of a TradingView chart (phone or desktop). Images 2 and 3 are enlarged top and bottom parts of the SAME screenshot — use them to read small labels and price-scale numbers.'
+      ? 'Image 1 is the whole screenshot of a TradingView chart (phone or desktop). Images 2 and 3 are enlarged overlapping halves of the SAME screenshot (top and bottom, or left and right) — use them to read small labels and price-scale numbers.'
       : 'The image is a screenshot of a TradingView chart (phone or desktop).',
     '',
     'Find the ONE trade or position on it and extract it.',

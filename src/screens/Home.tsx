@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useJournal, useNav } from '../context';
 import { fmtR, money } from '../lib/calc';
 import { insights, summarize } from '../lib/stats';
@@ -9,6 +9,7 @@ import { WeekStrip } from '../components/Charts';
 import { Brand, Icon, LOGO, TopBar } from '../ui';
 import { SyncBadge } from '../components/SyncBadge';
 import { loadDemo } from './demoActions';
+import { useVisionAvailable } from '../lib/vision-client';
 
 export function Home() {
   const { s, trades, states } = useJournal();
@@ -20,6 +21,31 @@ export function Home() {
   const active = s.accounts.filter((a) => a.status === 'active');
   const recent = trades.slice(-5).reverse();
   const d = s.settings.discipline;
+  const vision = useVisionAvailable();
+  const shotInput = useRef<HTMLInputElement>(null);
+  const shotButton = vision ? (
+    <>
+      <button type="button" className="card press shot-cta" onClick={() => shotInput.current?.click()}>
+        <span className="shotfill-icon"><Icon name="camera" size={22} /></span>
+        <span className="grow">
+          <b>Сделка по скриншоту</b>
+          <span className="tiny muted" style={{ display: 'block' }}>Прикрепите скриншот позиции из TradingView — поля заполнятся сами</span>
+        </span>
+        <Icon name="chevron" size={18} />
+      </button>
+      <input
+        ref={shotInput}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = '';
+          if (f) nav.push({ kind: 'trade-edit', shot: f });
+        }}
+      />
+    </>
+  ) : null;
 
   // discipline (per trade, not per account)
   const closedToday = todays.filter((t) => t.outcome !== 'open').sort((a, b) => a.entryTime.localeCompare(b.entryTime));
@@ -48,6 +74,7 @@ export function Home() {
           <button className="btn chrome-btn block" onClick={() => nav.push({ kind: 'account-edit' })}>Добавить проп-счёт</button>
           <button className="btn block" onClick={() => void loadDemo()}>Посмотреть на демо-данных</button>
         </div>
+        {shotButton && <div style={{ marginTop: 16 }}>{shotButton}</div>}
       </>
     );
   }
@@ -90,6 +117,8 @@ export function Home() {
             </div>
           )}
         </section>
+
+        {shotButton}
 
         {active.length > 0 && (
           <section className="stack">

@@ -6,7 +6,7 @@ import type { StoreState } from './store';
 
 export type Tab = 'home' | 'journal' | 'stats' | 'accounts';
 export type Layer =
-  | { kind: 'trade-edit'; id?: string }
+  | { kind: 'trade-edit'; id?: string; shot?: File }
   | { kind: 'trade-view'; id: string }
   | { kind: 'account-edit'; id?: string; template?: Partial<Account> }
   | { kind: 'account-view'; id: string }

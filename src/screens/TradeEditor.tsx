@@ -1,10 +1,12 @@
-import { useMemo, useState } from 'react';
-import type { Analysis, Direction, EntryMode, Trade } from '../types';
+import { useMemo, useRef, useState } from 'react';
+import type { Analysis, Direction, EntryMode, Timeframe, Trade } from '../types';
 import { useJournal, useNav } from '../context';
 import { enrichTrade, fmtNum, fmtR, money, uid } from '../lib/calc';
 import { formatDuration, fromLocalInput, toLocalInput } from '../lib/time';
 import { saveTrade, toast } from '../store';
-import { AnalysesEditor } from '../components/Analyses';
+import { AnalysesEditor, analysisFromFile } from '../components/Analyses';
+import { ScreenshotFill } from '../components/ScreenshotFill';
+import type { Recognition } from '../lib/vision';
 import { Field, Icon, NumInput, Seg, Stepper, TopBar, memorize, remember } from '../ui';
 
 type Sign = 'win' | 'loss';
@@ -128,7 +130,7 @@ function SignSeg({ value, onChange }: { value: Sign; onChange: (s: Sign) => void
   return <Seg value={value} options={[['win', '+ Профит'], ['loss', '− Убыток']]} onChange={onChange} />;
 }
 
-export function TradeEditor({ id }: { id?: string }) {
+export function TradeEditor({ id, shot }: { id?: string; shot?: File }) {
   const { s } = useJournal();
   const nav = useNav();
   const base = id ? s.trades.find((t) => t.id === id) : undefined;
@@ -136,6 +138,63 @@ export function TradeEditor({ id }: { id?: string }) {
   const [d, setD] = useState<Draft>(() => toDraft(base, active.map((a) => a.id)));
   const [allSymbols, setAllSymbols] = useState(false);
   const [more, setMore] = useState(() => !!base || remember('more', false));
+  const [filled, setFilled] = useState<Set<string>>(new Set());
+  const glow = (k: string) => filled.has(k);
+  const shotRef = useRef<{ id?: string; tf?: Timeframe }>({});
+
+  // the screenshot itself becomes the trade's chart analysis
+  const attachShot = async (file: File) => {
+    shotRef.current = {};
+    try {
+      const a = await analysisFromFile(file, shotRef.current.tf ?? remember<Timeframe>('tf', '5m'), s.backend);
+      shotRef.current.id = a.id;
+      setD((p) => ({ ...p, analyses: [...p.analyses, { ...a, timeframe: shotRef.current.tf ?? a.timeframe }] }));
+    } catch {
+      /* the trade can be saved without the picture */
+    }
+  };
+
+  const applyRecognition = (r: Recognition) => {
+    const usePrices = r.entry !== undefined && (r.exit !== undefined || r.pnl === undefined);
+    const useMoney = !usePrices && r.pnl !== undefined;
+    const keys = new Set<string>(
+      [
+        r.symbol && 'symbol',
+        r.direction && 'direction',
+        r.quantity && 'contracts',
+        usePrices && 'entryPrice',
+        usePrices && r.stop !== undefined && 'stopPrice',
+        usePrices && r.target !== undefined && 'targetPrice',
+        usePrices && r.exit !== undefined && 'exitPrice',
+        useMoney && 'pnl',
+        r.entryTime && 'entryTime',
+        r.exitTime && 'exitTime',
+      ].filter((k): k is string => !!k),
+    );
+    if (r.timeframe) shotRef.current.tf = r.timeframe;
+    setD((p) => {
+      const n: Draft = { ...p };
+      if (r.symbol) n.symbol = r.symbol;
+      if (r.direction) n.direction = r.direction;
+      if (r.quantity) n.contracts = r.quantity;
+      if (usePrices) {
+        Object.assign(n, { mode: 'prices', entryPrice: r.entry, stopPrice: r.stop, targetPrice: r.target, exitPrice: r.exit });
+      } else if (useMoney) {
+        // no exit price on the picture: keep the P&L it shows, and the levels in the note
+        n.mode = 'money';
+        n.pnlAbs = Math.abs(r.pnl!);
+        n.pnlSign = r.pnl! < 0 ? 'loss' : 'win';
+        if (r.entry !== undefined && r.stop !== undefined) n.stopPoints = Number(Math.abs(r.entry - r.stop).toFixed(6));
+        const levels = [r.entry !== undefined && `вход ${r.entry}`, r.stop !== undefined && `стоп ${r.stop}`, r.target !== undefined && `тейк ${r.target}`].filter(Boolean).join(', ');
+        if (levels && !p.notes.includes(levels)) n.notes = [p.notes, `Со скриншота: ${levels}`].filter(Boolean).join('\n');
+      }
+      if (r.entryTime) n.entryTime = toLocalInput(r.entryTime);
+      if (r.exitTime) n.exitTime = toLocalInput(r.exitTime);
+      if (r.timeframe) n.analyses = p.analyses.map((x) => (x.id === shotRef.current.id ? { ...x, timeframe: r.timeframe! } : x));
+      return n;
+    });
+    setFilled(keys);
+  };
   const [customSetup, setCustomSetup] = useState('');
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((p) => ({ ...p, [k]: v }));
   const preview = useMemo(() => enrichTrade(fromDraft(d, base), s.settings), [d, base, s.settings]);
@@ -170,6 +229,7 @@ export function TradeEditor({ id }: { id?: string }) {
         title={base ? 'Сделка' : 'Новая сделка'}
       />
       <div className="stack-lg">
+        {!base && <ScreenshotFill instruments={s.settings.instruments} initialFile={shot} onFilled={applyRecognition} onAttach={(f) => void attachShot(f)} />}
         {accountChoices.length > 0 ? (
           <Field label={accountChoices.length > 1 ? 'Счета (можно несколько — копитрейдинг)' : 'Счёт'}>
             <div className="chips">
@@ -187,7 +247,7 @@ export function TradeEditor({ id }: { id?: string }) {
           <div className="banner info"><Icon name="accounts" size={18} /><span>Нет активных проп-счетов — сделка попадёт только в общую статистику. Счёт можно добавить во вкладке «Счета».</span></div>
         )}
 
-        <Field label="Инструмент" hint={inst ? `тик ${inst.tickSize} = $${inst.tickValue} · пункт $${fmtNum(inst.tickValue / inst.tickSize, 2)} · комиссия $${inst.commission}` : 'Нет в списке инструментов — P&L считается 1:1'}>
+        <Field glow={glow('symbol')} label="Инструмент" hint={inst ? `тик ${inst.tickSize} = $${inst.tickValue} · пункт $${fmtNum(inst.tickValue / inst.tickSize, 2)} · комиссия $${inst.commission}` : 'Нет в списке инструментов — P&L считается 1:1'}>
           <div className="chips">
             {shownSymbols.map((i) => (
               <button key={i.symbol} type="button" className={`chip sym${d.symbol === i.symbol ? ' on' : ''}`} onClick={() => set('symbol', i.symbol)}>
@@ -198,13 +258,13 @@ export function TradeEditor({ id }: { id?: string }) {
           </div>
         </Field>
 
-        <div className="dir">
+        <div className={`dir${glow('direction') ? ' glow' : ''}`}>
           <button type="button" className={`long${d.direction === 'long' ? ' on' : ''}`} onClick={() => set('direction', 'long')}><Icon name="up" size={18} stroke={2.4} />LONG</button>
           <button type="button" className={`short${d.direction === 'short' ? ' on' : ''}`} onClick={() => set('direction', 'short')}><Icon name="down" size={18} stroke={2.4} />SHORT</button>
         </div>
 
         <div className="grid2">
-          <Field label="Контракты"><Stepper value={d.contracts} onChange={(v) => set('contracts', v)} /></Field>
+          <Field glow={glow('contracts')} label="Контракты"><Stepper value={d.contracts} onChange={(v) => set('contracts', v)} /></Field>
           <Field label="Ввод результата">
             <Seg value={d.mode} options={[['points', 'Пункты'], ['prices', 'Цены'], ['money', '$']]} onChange={(m) => set('mode', m)} />
           </Field>
@@ -226,15 +286,15 @@ export function TradeEditor({ id }: { id?: string }) {
         )}
         {d.mode === 'prices' && (
           <div className="grid2">
-            <Field label="Вход"><NumInput value={d.entryPrice} onChange={(v) => set('entryPrice', v)} placeholder="21450.25" /></Field>
-            <Field label="Выход"><NumInput value={d.exitPrice} onChange={(v) => set('exitPrice', v)} placeholder="пусто — открыта" /></Field>
-            <Field label="Стоп"><NumInput value={d.stopPrice} onChange={(v) => set('stopPrice', v)} /></Field>
-            <Field label="Тейк"><NumInput value={d.targetPrice} onChange={(v) => set('targetPrice', v)} placeholder="необязательно" /></Field>
+            <Field glow={glow('entryPrice')} label="Вход"><NumInput value={d.entryPrice} onChange={(v) => set('entryPrice', v)} placeholder="21450.25" /></Field>
+            <Field glow={glow('exitPrice')} label="Выход"><NumInput value={d.exitPrice} onChange={(v) => set('exitPrice', v)} placeholder="пусто — открыта" /></Field>
+            <Field glow={glow('stopPrice')} label="Стоп"><NumInput value={d.stopPrice} onChange={(v) => set('stopPrice', v)} /></Field>
+            <Field glow={glow('targetPrice')} label="Тейк"><NumInput value={d.targetPrice} onChange={(v) => set('targetPrice', v)} placeholder="необязательно" /></Field>
           </div>
         )}
         {d.mode === 'money' && (
           <div className="stack">
-            <Field label="Результат, $ (после комиссий)">
+            <Field glow={glow('pnl')} label="Результат, $ (после комиссий)">
               <div className="signed">
                 <NumInput big value={d.pnlAbs} onChange={(v) => set('pnlAbs', v)} placeholder="0" />
                 <SignSeg value={d.pnlSign} onChange={(v) => set('pnlSign', v)} />
@@ -261,8 +321,8 @@ export function TradeEditor({ id }: { id?: string }) {
         </div>
 
         <div className="grid2">
-          <Field label="Вход"><input className="input" type="datetime-local" value={d.entryTime} onChange={(e) => set('entryTime', e.target.value)} /></Field>
-          <Field label="Выход" hint={preview.durationMin !== undefined ? `в сделке ${formatDuration(preview.durationMin)}` : undefined}>
+          <Field glow={glow('entryTime')} label="Вход"><input className="input" type="datetime-local" value={d.entryTime} onChange={(e) => set('entryTime', e.target.value)} /></Field>
+          <Field glow={glow('exitTime')} label="Выход" hint={preview.durationMin !== undefined ? `в сделке ${formatDuration(preview.durationMin)}` : undefined}>
             <input className="input" type="datetime-local" value={d.exitTime} onChange={(e) => set('exitTime', e.target.value)} />
           </Field>
         </div>

@@ -5,6 +5,14 @@ import { chartImageUrl, imageToBlob, imageToDataUrl } from '../lib/tradingview';
 import { toast, uploadImage, useStore } from '../store';
 import { Icon, Lightbox, Sheet, memorize, remember } from '../ui';
 
+/** Stores a picked screenshot: Claude's asset store when synced, otherwise inline on the device. */
+export async function analysisFromFile(file: Blob, timeframe: Timeframe, backend: 'cloud' | 'local' | null): Promise<Analysis> {
+  let assetId: string | undefined;
+  if (backend === 'cloud') assetId = await uploadImage(await imageToBlob(file));
+  const imageData = assetId ? undefined : await imageToDataUrl(file);
+  return { id: uid(), createdAt: new Date().toISOString(), timeframe, assetId, imageData };
+}
+
 export function shotSrc(a: Analysis): string | undefined {
   if (a.assetId) return '/_blob/' + a.assetId;
   return a.imageData ?? a.imageUrl;
@@ -93,12 +101,7 @@ export function AnalysesEditor({ value, onChange }: { value: Analysis[]; onChang
     setBusy(true);
     try {
       const added: Analysis[] = [];
-      for (const f of list) {
-        let assetId: string | undefined;
-        if (backend === 'cloud') assetId = await uploadImage(await imageToBlob(f));
-        const imageData = assetId ? undefined : await imageToDataUrl(f);
-        added.push({ id: uid(), createdAt: new Date().toISOString(), timeframe: tf, assetId, imageData });
-      }
+      for (const f of list) added.push(await analysisFromFile(f, tf, backend));
       onChange([...value, ...added]);
     } catch {
       toast('Не удалось добавить изображение');

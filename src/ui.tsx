@@ -105,9 +105,9 @@ export function Seg<T extends string>({ value, options, onChange, small }: { val
   );
 }
 
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: ReactNode }) {
+export function Field({ label, children, hint, glow }: { label: string; children: ReactNode; hint?: ReactNode; glow?: boolean }) {
   return (
-    <label className="field">
+    <label className={`field${glow ? ' glow' : ''}`}>
       <span className="lbl">{label}</span>
       {children}
       {hint && <span className="tiny muted">{hint}</span>}

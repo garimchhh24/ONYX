@@ -260,3 +260,49 @@ describe('tradingview links', () => {
     expect(chartImageUrl('https://www.tradingview.com/chart/abc/')).toBeUndefined();
   });
 });
+
+import { parseRecognition, tvSymbol, tvTimeframe, tvTimeZone, visionPrompt } from '../vision';
+
+describe('screenshot recognition', () => {
+  const now = new Date('2026-11-20T16:00:00Z'); // 11:00 in New York
+  const I = S.instruments;
+  it('fills a long position that hit its target', () => {
+    const r = parseRecognition({
+      found: true, symbol: 'CME_MINI:NQ1!', timeframe: '5', direction: 'long', entry: 21450.25, stop: 21430, target: 21490,
+      exit: null, result: 'target', quantity: 2, pnl: 1600, date: null, entryTime: '09:42', timezone: '(UTC-5) New York', confidence: 0.9, note: '',
+    }, I, now);
+    expect(r).toMatchObject({ found: true, symbol: 'NQ', timeframe: '5m', direction: 'long', entry: 21450.25, stop: 21430, target: 21490, exit: 21490, exitSource: 'target', quantity: 2 });
+    expect(r.entryTime).toBe('2026-11-20T14:42:00.000Z');
+    expect(r.warnings).toEqual([]);
+  });
+  it('fixes swapped stop/target labels and trusts geometry over a wrong direction', () => {
+    const swapped = parseRecognition({ found: true, direction: 'long', entry: 100, stop: 110, target: 95, result: 'stop' }, I, now);
+    expect(swapped).toMatchObject({ direction: 'long', stop: 95, target: 110, exit: 95, exitSource: 'stop' });
+    expect(swapped.warnings.length).toBe(1);
+    const wrongDir = parseRecognition({ found: true, direction: 'long', entry: 100, stop: 105 }, I, now);
+    expect(wrongDir.direction).toBe('short');
+    expect(wrongDir.warnings.length).toBe(1);
+  });
+  it('reads numbers written as text and rejects junk', () => {
+    const r = parseRecognition({ found: true, symbol: 'MNQZ2025', entry: '21,450.25', stop: '21 430', target: 'n/a', quantity: '3', exit: 21470 }, I, now);
+    expect(r).toMatchObject({ symbol: 'MNQ', entry: 21450.25, stop: 21430, target: undefined, quantity: 3, exit: 21470, exitSource: 'shown', direction: 'long' });
+    expect(parseRecognition({ found: false, note: 'нет позиции' }, I, now)).toMatchObject({ found: false, note: 'нет позиции' });
+    expect(parseRecognition('oops', I, now).found).toBe(false);
+    expect(parseRecognition({ found: true, entry: -5 }, I, now).found).toBe(false);
+  });
+  it('drops a time that would be in the future when no date is shown', () => {
+    expect(parseRecognition({ found: true, entry: 1, stop: 0.5, entryTime: '15:30', timezone: 'New York' }, I, now).entryTime).toBeUndefined();
+    expect(parseRecognition({ found: true, entry: 1, stop: 0.5, date: '2026-11-19', entryTime: '15:30', exitTime: '15:10', timezone: 'New York' }, I, now))
+      .toMatchObject({ entryTime: '2026-11-19T20:30:00.000Z', exitTime: '2026-11-20T20:10:00.000Z' });
+  });
+  it('maps TradingView labels', () => {
+    expect(tvSymbol('ES1!', I)).toBe('ES');
+    expect(tvSymbol('COMEX:MGC1!', I)).toBe('MGC');
+    expect(['1', '15', '1h', '60', '4h', 'D', 'W', 'M', '30'].map(tvTimeframe)).toEqual(['1m', '15m', '1H', '1H', '4H', '1D', '1W', '1M', undefined]);
+    expect(tvTimeZone('(UTC+3) Moscow')).toBe('Europe/Moscow');
+    expect(tvTimeZone('UTC+5')).toBe('Etc/GMT-5');
+    expect(tvTimeZone('Exchange')).toBe('America/Chicago');
+    expect(tvTimeZone('(UTC+5:30) Kolkata')).toBeUndefined();
+    expect(visionPrompt(true)).toContain('Image 1');
+  });
+});

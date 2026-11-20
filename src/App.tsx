@@ -107,7 +107,7 @@ export default function App() {
         )}
         {top && (
           <Overlay key={layers.length + top.kind}>
-            {top.kind === 'trade-edit' && <TradeEditor key={top.id ?? 'new'} id={top.id} />}
+            {top.kind === 'trade-edit' && <TradeEditor key={top.id ?? 'new'} id={top.id} shot={top.shot} />}
             {top.kind === 'trade-view' && <TradeDetail id={top.id} />}
             {top.kind === 'account-edit' && <AccountEditor id={top.id} template={top.template} />}
             {top.kind === 'account-view' && <AccountDetail id={top.id} />}
