@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Analysis, Direction, Settings, Trade } from '../types';
 import {
   durationMinutes, fmtMoney, fmtNum, fmtPct, outcome, plannedRR, riskPercent, tradePnl, tradeR, tradeRisk, tradeSession, uid,
@@ -225,10 +225,23 @@ export function TradeForm({
         <button type="submit" className="btn primary" disabled={!valid}>Сохранить</button>
         <button type="button" className="btn" onClick={onCancel}>Отмена</button>
         <span className="spacer" />
-        {onDelete && (
-          <button type="button" className="btn danger" onClick={() => confirm('Удалить сделку?') && onDelete()}>Удалить</button>
-        )}
+        {onDelete && <DeleteButton onDelete={onDelete} />}
       </div>
     </form>
+  );
+}
+
+/** Two-step delete (native confirm() is unavailable in some embedded viewers). */
+function DeleteButton({ onDelete }: { onDelete: () => void }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button type="button" className={`btn danger${armed ? ' primary' : ''}`} onClick={() => (armed ? onDelete() : setArmed(true))}>
+      {armed ? 'Точно удалить?' : 'Удалить'}
+    </button>
   );
 }
