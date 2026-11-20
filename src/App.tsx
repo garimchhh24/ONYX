@@ -75,10 +75,12 @@ export default function App() {
     <JournalCtx.Provider value={journal}>
       <NavCtx.Provider value={nav}>
         <main className="app" aria-hidden={!!top}>
-          {tab === 'home' && <Home />}
-          {tab === 'journal' && <JournalScreen />}
-          {tab === 'stats' && <Stats />}
-          {tab === 'accounts' && <Accounts />}
+          <div key={tab} className="screen">
+            {tab === 'home' && <Home />}
+            {tab === 'journal' && <JournalScreen />}
+            {tab === 'stats' && <Stats />}
+            {tab === 'accounts' && <Accounts />}
+          </div>
         </main>
         {!top && (
           <nav className="tabbar" aria-label="Разделы">
