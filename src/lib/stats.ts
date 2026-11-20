@@ -1,142 +1,112 @@
-import type { Settings, Trade } from '../types';
-import {
-  durationMinutes,
-  formatCurrency,
-  outcome,
-  plannedRR,
-  riskPercent,
-  tradePnl,
-  tradeR,
-  tradeRisk,
-  tradeSession,
-} from './calc';
-import { dayKey, WEEKDAY_NAMES, zonedParts } from './time';
+import type { Settings } from '../types';
+import { money, type ETrade } from './calc';
+import { WEEKDAY_NAMES, weekdayOfKey, zonedParts } from './time';
+
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
+const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+const defined = <T,>(xs: (T | undefined)[]) => xs.filter((x): x is T => x !== undefined);
+
+export const closedOnly = (ts: ETrade[]) => ts.filter((t) => t.outcome !== 'open');
+const byEntry = (a: ETrade, b: ETrade) => new Date(a.entryTime).getTime() - new Date(b.entryTime).getTime();
 
 export interface Summary {
-  total: number;
+  trades: number;
   open: number;
   wins: number;
   losses: number;
   breakeven: number;
-  /** wins / (wins + losses) × 100 — breakeven trades excluded */
-  winRate: number | undefined;
-  netPnl: number;
+  winRate?: number;
+  net: number;
   grossProfit: number;
   grossLoss: number;
-  profitFactor: number | undefined;
-  avgWin: number | undefined;
-  avgLoss: number | undefined;
-  /** avg win / |avg loss| */
-  payoff: number | undefined;
-  /** average PnL per closed trade */
-  expectancy: number | undefined;
+  profitFactor?: number;
+  avgWin?: number;
+  avgLoss?: number;
+  payoff?: number;
+  expectancy?: number;
+  avgR?: number;
   totalR: number;
-  avgR: number | undefined;
   rCount: number;
-  largestWin: number | undefined;
-  largestLoss: number | undefined;
   maxDrawdown: number;
-  maxDrawdownPct: number | undefined;
+  bestDay?: { day: string; pnl: number };
+  worstDay?: { day: string; pnl: number };
+  greenDays: number;
+  redDays: number;
   maxWinStreak: number;
   maxLossStreak: number;
-  /** positive = wins in a row, negative = losses in a row */
   currentStreak: number;
-  avgHoldWin: number | undefined;
-  avgHoldLoss: number | undefined;
-  avgRisk: number | undefined;
-  avgRiskPct: number | undefined;
-  overRiskCount: number;
-  avgPlannedRR: number | undefined;
-  /** Breakeven win rate implied by the realized payoff ratio */
-  requiredWinRate: number | undefined;
-  totalFees: number;
+  avgHoldWin?: number;
+  avgHoldLoss?: number;
+  avgRisk?: number;
+  requiredWinRate?: number;
+  fees: number;
 }
 
-const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : undefined);
-const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
+/** Trades must be sorted by exit time (enrichAll does that). */
+export function summarize(all: ETrade[]): Summary {
+  const closed = closedOnly(all);
+  const nets = closed.map((t) => t.net!);
+  const wins = closed.filter((t) => t.outcome === 'win');
+  const losses = closed.filter((t) => t.outcome === 'loss');
+  const winP = wins.map((t) => t.net!);
+  const lossP = losses.map((t) => t.net!);
+  const rs = defined(closed.map((t) => t.r));
+  const grossProfit = sum(nets.filter((p) => p > 0));
+  const grossLoss = sum(nets.filter((p) => p < 0));
 
-export function sortByExit(trades: Trade[]): Trade[] {
-  return [...trades].sort(
-    (a, b) => new Date(a.exitTime ?? a.entryTime).getTime() - new Date(b.exitTime ?? b.entryTime).getTime(),
-  );
-}
-
-export function summarize(trades: Trade[], settings: Settings): Summary {
-  const closed = sortByExit(trades.filter((t) => outcome(t) !== 'open'));
-  const pnls = closed.map((t) => tradePnl(t)!);
-  const winsT = closed.filter((t) => outcome(t) === 'win');
-  const lossT = closed.filter((t) => outcome(t) === 'loss');
-  const winP = winsT.map((t) => tradePnl(t)!);
-  const lossP = lossT.map((t) => tradePnl(t)!);
-  const rs = closed.map(tradeR).filter((r): r is number => r !== undefined);
-
-  const grossProfit = sum(pnls.filter((p) => p > 0));
-  const grossLoss = sum(pnls.filter((p) => p < 0));
-
-  // equity / drawdown
-  let equity = settings.startingBalance || 0;
-  let peak = equity;
-  let maxDD = 0;
-  let maxDDPct: number | undefined = settings.startingBalance ? 0 : undefined;
-  for (const p of pnls) {
-    equity += p;
-    if (equity > peak) peak = equity;
-    const dd = peak - equity;
-    if (dd > maxDD) maxDD = dd;
-    if (maxDDPct !== undefined && peak > 0) maxDDPct = Math.max(maxDDPct, (dd / peak) * 100);
+  let eq = 0, peak = 0, maxDD = 0;
+  for (const p of nets) {
+    eq += p;
+    peak = Math.max(peak, eq);
+    maxDD = Math.max(maxDD, peak - eq);
   }
-
-  // streaks (breakeven does not break or extend a streak)
   let maxW = 0, maxL = 0, cur = 0;
   for (const t of closed) {
-    const o = outcome(t);
-    if (o === 'win') cur = cur > 0 ? cur + 1 : 1;
-    else if (o === 'loss') cur = cur < 0 ? cur - 1 : -1;
+    if (t.outcome === 'win') cur = cur > 0 ? cur + 1 : 1;
+    else if (t.outcome === 'loss') cur = cur < 0 ? cur - 1 : -1;
     else continue;
     maxW = Math.max(maxW, cur);
     maxL = Math.max(maxL, -cur);
   }
-
-  const risks = closed.map(tradeRisk).filter((r): r is number => r !== undefined);
-  const riskPcts = closed.map((t) => riskPercent(t, settings)).filter((r): r is number => r !== undefined);
+  const days = [...dailyPnl(closed).entries()].map(([day, v]) => ({ day, pnl: v.pnl }));
+  const best = days.length ? days.reduce((a, b) => (b.pnl > a.pnl ? b : a)) : undefined;
+  const worst = days.length ? days.reduce((a, b) => (b.pnl < a.pnl ? b : a)) : undefined;
   const avgWin = avg(winP);
   const avgLoss = avg(lossP);
   const payoff = avgWin !== undefined && avgLoss ? avgWin / Math.abs(avgLoss) : undefined;
-  const decided = winsT.length + lossT.length;
+  const decided = wins.length + losses.length;
 
   return {
-    total: trades.length,
-    open: trades.length - closed.length,
-    wins: winsT.length,
-    losses: lossT.length,
+    trades: closed.length,
+    open: all.length - closed.length,
+    wins: wins.length,
+    losses: losses.length,
     breakeven: closed.length - decided,
-    winRate: decided ? (winsT.length / decided) * 100 : undefined,
-    netPnl: sum(pnls),
+    winRate: decided ? (wins.length / decided) * 100 : undefined,
+    net: sum(nets),
     grossProfit,
     grossLoss,
     profitFactor: grossLoss ? grossProfit / Math.abs(grossLoss) : grossProfit > 0 ? Infinity : undefined,
     avgWin,
     avgLoss,
     payoff,
-    expectancy: avg(pnls),
-    totalR: sum(rs),
+    expectancy: avg(nets),
     avgR: avg(rs),
+    totalR: sum(rs),
     rCount: rs.length,
-    largestWin: winP.length ? Math.max(...winP) : undefined,
-    largestLoss: lossP.length ? Math.min(...lossP) : undefined,
     maxDrawdown: maxDD,
-    maxDrawdownPct: maxDDPct,
+    bestDay: best && best.pnl > 0 ? best : undefined,
+    worstDay: worst && worst.pnl < 0 ? worst : undefined,
+    greenDays: days.filter((d) => d.pnl > 0).length,
+    redDays: days.filter((d) => d.pnl < 0).length,
     maxWinStreak: maxW,
     maxLossStreak: maxL,
     currentStreak: cur,
-    avgHoldWin: avg(winsT.map(durationMinutes).filter((d): d is number => d !== undefined)),
-    avgHoldLoss: avg(lossT.map(durationMinutes).filter((d): d is number => d !== undefined)),
-    avgRisk: avg(risks),
-    avgRiskPct: avg(riskPcts),
-    overRiskCount: riskPcts.filter((r) => r > settings.maxRiskPercent + 1e-9).length,
-    avgPlannedRR: avg(closed.map(plannedRR).filter((r): r is number => r !== undefined)),
+    avgHoldWin: avg(defined(wins.map((t) => t.durationMin))),
+    avgHoldLoss: avg(defined(losses.map((t) => t.durationMin))),
+    avgRisk: avg(defined(closed.map((t) => t.risk))),
     requiredWinRate: payoff !== undefined ? (1 / (1 + payoff)) * 100 : undefined,
-    totalFees: sum(closed.map((t) => t.fees || 0)),
+    fees: sum(closed.map((t) => t.feesUsd)),
   };
 }
 
@@ -145,44 +115,38 @@ export interface GroupRow {
   trades: number;
   wins: number;
   losses: number;
-  winRate: number | undefined;
+  winRate?: number;
   pnl: number;
-  avgR: number | undefined;
-  profitFactor: number | undefined;
-  expectancy: number | undefined;
+  avgR?: number;
+  profitFactor?: number;
+  expectancy?: number;
 }
 
-export function groupStats(
-  trades: Trade[],
-  keyFn: (t: Trade) => string | string[] | undefined,
-  order?: string[],
-): GroupRow[] {
-  const groups = new Map<string, Trade[]>();
-  for (const t of trades) {
-    if (outcome(t) === 'open') continue;
+export function groupStats(trades: ETrade[], keyFn: (t: ETrade) => string | string[] | undefined, order?: string[]): GroupRow[] {
+  const groups = new Map<string, ETrade[]>();
+  for (const t of closedOnly(trades)) {
     const k = keyFn(t);
-    const keys = Array.isArray(k) ? k : k ? [k] : [];
-    for (const key of keys) {
+    for (const key of Array.isArray(k) ? k : k ? [k] : []) {
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)!.push(t);
     }
   }
-  const rows: GroupRow[] = [...groups.entries()].map(([key, ts]) => {
-    const pnls = ts.map((t) => tradePnl(t)!);
-    const wins = ts.filter((t) => outcome(t) === 'win').length;
-    const losses = ts.filter((t) => outcome(t) === 'loss').length;
-    const gp = sum(pnls.filter((p) => p > 0));
-    const gl = Math.abs(sum(pnls.filter((p) => p < 0)));
+  const rows = [...groups.entries()].map(([key, ts]): GroupRow => {
+    const nets = ts.map((t) => t.net!);
+    const wins = ts.filter((t) => t.outcome === 'win').length;
+    const losses = ts.filter((t) => t.outcome === 'loss').length;
+    const gp = sum(nets.filter((p) => p > 0));
+    const gl = Math.abs(sum(nets.filter((p) => p < 0)));
     return {
       key,
       trades: ts.length,
       wins,
       losses,
       winRate: wins + losses ? (wins / (wins + losses)) * 100 : undefined,
-      pnl: sum(pnls),
-      avgR: avg(ts.map(tradeR).filter((r): r is number => r !== undefined)),
+      pnl: sum(nets),
+      avgR: avg(defined(ts.map((t) => t.r))),
       profitFactor: gl ? gp / gl : gp > 0 ? Infinity : undefined,
-      expectancy: avg(pnls),
+      expectancy: avg(nets),
     };
   });
   if (order) rows.sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
@@ -190,28 +154,62 @@ export function groupStats(
   return rows;
 }
 
-export const bySession = (trades: Trade[], s: Settings) => groupStats(trades, (t) => tradeSession(t, s));
-export const bySymbol = (trades: Trade[]) => groupStats(trades, (t) => t.symbol.toUpperCase());
-export const bySetup = (trades: Trade[]) => groupStats(trades, (t) => t.setup || 'Без сетапа');
-export const byDirection = (trades: Trade[]) =>
-  groupStats(trades, (t) => (t.direction === 'long' ? 'Long' : 'Short'), ['Long', 'Short']);
-export const byMistake = (trades: Trade[]) =>
-  groupStats(trades, (t) => (t.mistakes.length ? t.mistakes : 'Без ошибок'));
-export const byEmotion = (trades: Trade[]) => groupStats(trades, (t) => t.emotion || undefined);
-export const byWeekday = (trades: Trade[], s: Settings) =>
-  groupStats(trades, (t) => WEEKDAY_NAMES[zonedParts(t.entryTime, s.displayTimeZone).weekday], WEEKDAY_NAMES);
-export const byHour = (trades: Trade[], s: Settings) => {
+/** 1-based position of each trade within its trading day (by entry time). */
+export function tradeNumberInDay(trades: ETrade[]): Map<string, number> {
+  const byDay = new Map<string, ETrade[]>();
+  for (const t of trades) {
+    if (!byDay.has(t.day)) byDay.set(t.day, []);
+    byDay.get(t.day)!.push(t);
+  }
+  const out = new Map<string, number>();
+  for (const ts of byDay.values()) {
+    ts.sort(byEntry).forEach((t, i) => out.set(t.id, i + 1));
+  }
+  return out;
+}
+
+/** Number of losses in a row (same day) right before each trade. */
+export function lossesBefore(trades: ETrade[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const byDay = new Map<string, ETrade[]>();
+  for (const t of closedOnly(trades)) {
+    if (!byDay.has(t.day)) byDay.set(t.day, []);
+    byDay.get(t.day)!.push(t);
+  }
+  for (const ts of byDay.values()) {
+    ts.sort(byEntry);
+    let streak = 0;
+    for (const t of ts) {
+      out.set(t.id, streak);
+      if (t.outcome === 'loss') streak++;
+      else if (t.outcome === 'win') streak = 0;
+    }
+  }
+  return out;
+}
+
+const SESSION_ORDER = (s: Settings) => [...s.sessions.map((x) => x.name), 'Вне сессий'];
+
+export const bySession = (ts: ETrade[], s: Settings) => groupStats(ts, (t) => t.session, SESSION_ORDER(s)).filter((r) => r.trades);
+export const bySymbol = (ts: ETrade[]) => groupStats(ts, (t) => t.symbol);
+export const bySetup = (ts: ETrade[]) => groupStats(ts, (t) => t.setup || 'Без сетапа');
+export const byDirection = (ts: ETrade[]) => groupStats(ts, (t) => (t.direction === 'long' ? 'Long' : 'Short'), ['Long', 'Short']);
+export const byMistake = (ts: ETrade[]) => groupStats(ts, (t) => (t.mistakes.length ? t.mistakes : 'Без ошибок'));
+export const byEmotion = (ts: ETrade[]) => groupStats(ts, (t) => t.emotion || undefined);
+export const byPlan = (ts: ETrade[]) =>
+  groupStats(ts, (t) => (t.followedPlan === undefined ? undefined : t.followedPlan ? 'По плану' : 'Вне плана'), ['По плану', 'Вне плана']);
+export const byWeekday = (ts: ETrade[]) => groupStats(ts, (t) => WEEKDAY_NAMES[weekdayOfKey(t.day)], WEEKDAY_NAMES);
+export const byHour = (ts: ETrade[], s: Settings) => {
   const order = Array.from({ length: 24 }, (_, h) => `${String(h).padStart(2, '0')}:00`);
-  return groupStats(trades, (t) => order[zonedParts(t.entryTime, s.displayTimeZone).hour], order);
+  return groupStats(ts, (t) => order[zonedParts(t.entryTime, s.statsTimeZone).hour], order);
 };
-export const byPlan = (trades: Trade[]) =>
-  groupStats(
-    trades,
-    (t) => (t.followedPlan === undefined ? undefined : t.followedPlan ? 'По плану' : 'Вне плана'),
-    ['По плану', 'Вне плана'],
-  );
-export const byRating = (trades: Trade[]) =>
-  groupStats(trades, (t) => (t.rating ? '★'.repeat(t.rating) : undefined), ['★', '★★', '★★★', '★★★★', '★★★★★']);
+export const byTradeNumber = (ts: ETrade[]) => {
+  const n = tradeNumberInDay(ts);
+  const order = ['1-я', '2-я', '3-я', '4+'];
+  return groupStats(ts, (t) => order[Math.min(4, n.get(t.id) ?? 1) - 1], order);
+};
+export const byContracts = (ts: ETrade[]) =>
+  groupStats(ts, (t) => `${t.contracts} ${t.symbol}`);
 
 export interface EquityPoint {
   i: number;
@@ -222,54 +220,44 @@ export interface EquityPoint {
   symbol: string;
 }
 
-export function equityCurve(trades: Trade[], settings: Settings): EquityPoint[] {
-  const closed = sortByExit(trades.filter((t) => outcome(t) !== 'open'));
-  let equity = settings.startingBalance || 0;
-  let peak = equity;
-  const pts: EquityPoint[] = [{ i: 0, date: '', equity, pnl: 0, drawdown: 0, symbol: 'Старт' }];
-  closed.forEach((t, idx) => {
-    const pnl = tradePnl(t)!;
-    equity += pnl;
-    peak = Math.max(peak, equity);
-    pts.push({
-      i: idx + 1,
-      date: t.exitTime ?? t.entryTime,
-      equity: Math.round(equity * 100) / 100,
-      pnl,
-      drawdown: Math.round((equity - peak) * 100) / 100,
-      symbol: t.symbol,
-    });
+export function equityCurve(trades: ETrade[]): EquityPoint[] {
+  let eq = 0, peak = 0;
+  const pts: EquityPoint[] = [{ i: 0, date: '', equity: 0, pnl: 0, drawdown: 0, symbol: '' }];
+  closedOnly(trades).forEach((t, idx) => {
+    eq += t.net!;
+    peak = Math.max(peak, eq);
+    pts.push({ i: idx + 1, date: t.exitTime ?? t.entryTime, equity: round2(eq), pnl: t.net!, drawdown: round2(eq - peak), symbol: t.symbol });
   });
   return pts;
 }
 
-export function dailyPnl(trades: Trade[], settings: Settings): Map<string, { pnl: number; trades: number }> {
-  const m = new Map<string, { pnl: number; trades: number }>();
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+export function dailyPnl(trades: ETrade[]): Map<string, { pnl: number; trades: number; wins: number }> {
+  const m = new Map<string, { pnl: number; trades: number; wins: number }>();
   for (const t of trades) {
-    const pnl = tradePnl(t);
-    if (pnl === undefined) continue;
-    const k = dayKey(t.exitTime ?? t.entryTime, settings.displayTimeZone);
-    const cur = m.get(k) ?? { pnl: 0, trades: 0 };
-    cur.pnl += pnl;
+    if (t.net === undefined) continue;
+    const cur = m.get(t.day) ?? { pnl: 0, trades: 0, wins: 0 };
+    cur.pnl += t.net;
     cur.trades += 1;
-    m.set(k, cur);
+    if (t.outcome === 'win') cur.wins += 1;
+    m.set(t.day, cur);
   }
   return m;
 }
 
-export function rHistogram(trades: Trade[]): { bucket: string; from: number; count: number }[] {
-  const edges = [-3, -2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 5];
+export function rHistogram(trades: ETrade[]): { bucket: string; from: number; count: number }[] {
+  const edges = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2, 3, 4];
   const buckets = [
-    { bucket: '< -3R', from: -Infinity, count: 0 },
-    ...edges.slice(0, -1).map((e, i) => ({ bucket: `${e}…${edges[i + 1]}`, from: e, count: 0 })),
-    { bucket: '> 5R', from: 5, count: 0 },
+    { bucket: '< −2', from: -Infinity, count: 0 },
+    ...edges.slice(0, -1).map((e, i) => ({ bucket: `${e}…${edges[i + 1]}`.replace(/-/g, '−'), from: e, count: 0 })),
+    { bucket: '> 4', from: 4, count: 0 },
   ];
   for (const t of trades) {
-    const r = tradeR(t);
-    if (r === undefined) continue;
+    if (t.r === undefined) continue;
     let idx = buckets.length - 1;
     for (let i = 1; i < buckets.length; i++) {
-      if (r < buckets[i].from) {
+      if (t.r < buckets[i].from) {
         idx = i - 1;
         break;
       }
@@ -279,67 +267,71 @@ export function rHistogram(trades: Trade[]): { bucket: string; from: number; cou
   return buckets;
 }
 
-/** Plain-language observations that point at what to change. */
-export function insights(trades: Trade[], settings: Settings): string[] {
+/** Plain-language conclusions that point at what to change. */
+export function insights(all: ETrade[], settings: Settings): string[] {
   const out: string[] = [];
-  const closed = trades.filter((t) => outcome(t) !== 'open');
+  const closed = closedOnly(all);
   if (closed.length < 5) {
-    out.push('Нужно минимум 5 закрытых сделок для выводов. Чем больше выборка, тем надёжнее статистика (идеально — 30+).');
+    out.push('Запишите хотя бы 5 сделок — и здесь появятся выводы: в какую сессию вы теряете, какие ошибки стоят дороже всего, когда пора остановиться.');
     return out;
   }
-  const s = summarize(closed, settings);
-  const cur = settings.currency;
-  const money = (v: number) => formatCurrency(v, cur, 0);
+  const s = summarize(closed);
+  const m = (v: number) => money(v, { cents: false });
 
-  if (s.winRate !== undefined && s.requiredWinRate !== undefined) {
+  if (s.winRate !== undefined && s.requiredWinRate !== undefined && s.payoff !== undefined) {
     const edge = s.winRate - s.requiredWinRate;
     out.push(
       edge >= 0
-        ? `Винрейт ${s.winRate.toFixed(0)}% выше точки безубыточности ${s.requiredWinRate.toFixed(0)}% (при текущем соотношении прибыль/убыток ${s.payoff!.toFixed(2)}). Запас: ${edge.toFixed(0)} п.п.`
-        : `Винрейт ${s.winRate.toFixed(0)}% ниже необходимых ${s.requiredWinRate.toFixed(0)}% при текущем соотношении прибыль/убыток ${s.payoff!.toFixed(2)}. Нужно либо держать прибыль дольше, либо резать убытки раньше.`,
-    );
-  }
-  if (s.avgHoldLoss !== undefined && s.avgHoldWin !== undefined && s.avgHoldLoss > s.avgHoldWin * 1.5) {
-    out.push(
-      `Убыточные сделки вы держите в ${(s.avgHoldLoss / s.avgHoldWin).toFixed(1)} раза дольше прибыльных — признак «пересиживания» убытков.`,
+        ? `Винрейт ${s.winRate.toFixed(0)}% при нужных ${s.requiredWinRate.toFixed(0)}% (средняя прибыль в ${s.payoff.toFixed(1)} раза больше убытка). Запас ${edge.toFixed(0)} п.п.`
+        : `Винрейт ${s.winRate.toFixed(0)}% ниже нужных ${s.requiredWinRate.toFixed(0)}% при средней прибыли/убытке ${s.payoff.toFixed(2)}. Держите прибыль дольше или режьте убытки раньше.`,
     );
   }
 
-  const pickBestWorst = (rows: GroupRow[], label: string) => {
+  // overtrading: what if you stopped after N trades a day
+  const nums = tradeNumberInDay(closed);
+  for (const n of [2, 3]) {
+    const extra = closed.filter((t) => (nums.get(t.id) ?? 1) > n);
+    const pnl = sum(extra.map((t) => t.net!));
+    if (extra.length >= 3 && pnl < 0) {
+      out.push(`Сделки после ${n}-й за день принесли ${m(pnl)}. Лимит ${n} сделки в день добавил бы ${m(-pnl)}.`);
+      break;
+    }
+  }
+  // tilt: trades after 2+ losses in a row
+  const lb = lossesBefore(closed);
+  const tilt = closed.filter((t) => (lb.get(t.id) ?? 0) >= 2);
+  if (tilt.length >= 3) {
+    const pnl = sum(tilt.map((t) => t.net!));
+    const wr = (tilt.filter((t) => t.outcome === 'win').length / tilt.length) * 100;
+    if (pnl < 0) out.push(`После двух убытков подряд: винрейт ${wr.toFixed(0)}%, итог ${m(pnl)}. Правило «2 стопа — закрываю платформу» сэкономило бы ${m(-pnl)}.`);
+  }
+
+  const pick = (rows: GroupRow[], label: string) => {
     const valid = rows.filter((r) => r.trades >= 3);
     if (valid.length < 2) return;
     const best = valid.reduce((a, b) => (b.pnl > a.pnl ? b : a));
     const worst = valid.reduce((a, b) => (b.pnl < a.pnl ? b : a));
-    if (best.key === worst.key) return;
-    out.push(
-      `${label}: лучше всего — «${best.key}» (${money(best.pnl)}, винрейт ${best.winRate?.toFixed(0) ?? '—'}%), хуже всего — «${worst.key}» (${money(worst.pnl)}, винрейт ${worst.winRate?.toFixed(0) ?? '—'}%).`,
-    );
+    if (best.key === worst.key || worst.pnl >= 0) return;
+    out.push(`${label}: лучше всего «${best.key}» (${m(best.pnl)}, ${best.winRate?.toFixed(0) ?? '—'}%), хуже всего «${worst.key}» (${m(worst.pnl)}, ${worst.winRate?.toFixed(0) ?? '—'}%).`);
   };
-  pickBestWorst(bySession(closed, settings), 'Сессии');
-  pickBestWorst(byWeekday(closed, settings), 'Дни недели');
-  pickBestWorst(bySetup(closed), 'Сетапы');
-  pickBestWorst(bySymbol(closed), 'Инструменты');
+  pick(bySession(closed, settings), 'Сессии');
+  pick(bySetup(closed), 'Сетапы');
+  pick(byWeekday(closed), 'Дни');
+  pick(bySymbol(closed), 'Инструменты');
 
   const plan = byPlan(closed);
   const on = plan.find((r) => r.key === 'По плану');
   const off = plan.find((r) => r.key === 'Вне плана');
-  if (on && off && off.trades >= 2) {
-    out.push(
-      `Сделки по плану: ${money(on.pnl)} (винрейт ${on.winRate?.toFixed(0) ?? '—'}%). Вне плана: ${money(off.pnl)} (винрейт ${off.winRate?.toFixed(0) ?? '—'}%).`,
-    );
+  if (on && off && off.trades >= 2 && off.pnl < on.pnl) {
+    out.push(`По плану: ${m(on.pnl)} (${on.winRate?.toFixed(0) ?? '—'}%). Вне плана: ${m(off.pnl)} (${off.winRate?.toFixed(0) ?? '—'}%).`);
   }
   const mistakes = byMistake(closed).filter((r) => r.key !== 'Без ошибок' && r.pnl < 0);
   if (mistakes.length) {
-    const worst = mistakes.reduce((a, b) => (b.pnl < a.pnl ? b : a));
-    out.push(`Самая дорогая ошибка — «${worst.key}»: ${money(worst.pnl)} за ${worst.trades} сделок.`);
+    const w = mistakes.reduce((a, b) => (b.pnl < a.pnl ? b : a));
+    out.push(`Самая дорогая ошибка — «${w.key}»: ${m(w.pnl)} за ${w.trades} сд.`);
   }
-  if (s.overRiskCount > 0) {
-    out.push(`${s.overRiskCount} сделок с риском выше лимита ${settings.maxRiskPercent}% от депозита.`);
-  }
-  const dirs = byDirection(closed);
-  if (dirs.length === 2 && dirs.every((d) => d.trades >= 3) && Math.sign(dirs[0].pnl) !== Math.sign(dirs[1].pnl)) {
-    const good = dirs[0].pnl > 0 ? dirs[0] : dirs[1];
-    out.push(`Прибыль приносят только ${good.key}-сделки (${money(good.pnl)}). Стоит пересмотреть противоположное направление.`);
+  if (s.avgHoldLoss !== undefined && s.avgHoldWin !== undefined && s.avgHoldLoss > s.avgHoldWin * 1.5) {
+    out.push(`Убыточные сделки вы держите в ${(s.avgHoldLoss / s.avgHoldWin).toFixed(1)} раза дольше прибыльных — признак пересиживания.`);
   }
   return out;
 }

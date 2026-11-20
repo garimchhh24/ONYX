@@ -1,99 +1,155 @@
-import type { Settings, Trade } from '../types';
+import type { Instrument, Settings, Trade } from '../types';
+import { findInstrument, miniEquivalent, pointValue } from './instruments';
 import { sessionLabel } from './sessions';
+import { tradingDay } from './time';
 
 export type Outcome = 'win' | 'loss' | 'be' | 'open';
 
-/** |R| below this is treated as breakeven */
+/** |R| below this is breakeven; without risk, |$| below BE_USD */
 export const BE_THRESHOLD_R = 0.1;
+export const BE_USD = 0.5;
 
-const dirSign = (t: Trade) => (t.direction === 'long' ? 1 : -1);
-
-export function isClosed(t: Trade): boolean {
-  return t.pnlOverride !== undefined || t.exitPrice !== undefined;
+/** A trade with every derived number computed once. */
+export interface ETrade extends Trade {
+  inst?: Instrument;
+  /** $ per 1.0 point for one contract */
+  pv: number;
+  /** signed points captured */
+  points?: number;
+  ticks?: number;
+  gross?: number;
+  feesUsd: number;
+  /** net $ per account */
+  net?: number;
+  risk?: number;
+  /** stop distance in points */
+  riskPoints?: number;
+  r?: number;
+  plannedRR?: number;
+  outcome: Outcome;
+  session: string;
+  /** CME trading day YYYY-MM-DD */
+  day: string;
+  durationMin?: number;
+  miniEq: number;
 }
 
-/** Net PnL in account currency (broker value wins over calculation). */
-export function tradePnl(t: Trade): number | undefined {
-  if (t.pnlOverride !== undefined) return t.pnlOverride;
-  if (t.exitPrice === undefined) return undefined;
-  const gross = (t.exitPrice - t.entryPrice) * dirSign(t) * t.size * (t.pointValue || 1);
-  return gross - (t.fees || 0);
+const sign = (t: Trade) => (t.direction === 'long' ? 1 : -1);
+const num = (v: number | undefined): v is number => typeof v === 'number' && Number.isFinite(v);
+
+export function enrichTrade(t: Trade, settings: Settings): ETrade {
+  const inst = findInstrument(t.symbol, settings.instruments);
+  const pv = inst ? pointValue(inst) : 1;
+  const contracts = t.contracts || 1;
+
+  let points: number | undefined;
+  let riskPoints: number | undefined;
+  let targetPts: number | undefined;
+  if (t.mode === 'prices') {
+    if (num(t.entryPrice) && num(t.exitPrice)) points = (t.exitPrice - t.entryPrice) * sign(t);
+    if (num(t.entryPrice) && num(t.stopPrice) && t.stopPrice !== 0) riskPoints = Math.abs(t.entryPrice - t.stopPrice);
+    if (num(t.entryPrice) && num(t.targetPrice) && t.targetPrice !== 0) targetPts = Math.abs(t.targetPrice - t.entryPrice);
+  } else if (t.mode === 'points') {
+    if (num(t.resultPoints)) points = t.resultPoints;
+    if (num(t.stopPoints) && t.stopPoints > 0) riskPoints = t.stopPoints;
+    if (num(t.targetPoints) && t.targetPoints > 0) targetPts = t.targetPoints;
+  } else {
+    if (num(t.stopPoints) && t.stopPoints > 0) riskPoints = t.stopPoints;
+  }
+
+  const feesUsd = num(t.fees) ? t.fees : (inst?.commission ?? 0) * contracts;
+  let gross: number | undefined = num(t.gross) ? t.gross : points !== undefined ? points * contracts * pv : undefined;
+  let net: number | undefined;
+  if (num(t.pnl)) {
+    net = t.pnl;
+    gross = gross ?? t.pnl + feesUsd;
+  } else if (gross !== undefined) {
+    net = gross - feesUsd;
+  }
+  if (points === undefined && gross !== undefined && pv) points = gross / contracts / pv;
+
+  const risk = num(t.riskUsd) && t.riskUsd > 0 ? t.riskUsd : riskPoints ? riskPoints * contracts * pv : undefined;
+  const r = net !== undefined && risk ? net / risk : undefined;
+
+  let outcome: Outcome = 'open';
+  if (net !== undefined) {
+    const be = r !== undefined ? Math.abs(r) < BE_THRESHOLD_R : Math.abs(net) < BE_USD;
+    outcome = be ? 'be' : net > 0 ? 'win' : 'loss';
+  }
+  const dur = t.exitTime ? (new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime()) / 60000 : undefined;
+
+  return {
+    ...t,
+    inst,
+    pv,
+    points,
+    ticks: points !== undefined && inst ? points / inst.tickSize : undefined,
+    gross,
+    feesUsd,
+    net,
+    risk,
+    riskPoints,
+    r,
+    plannedRR: riskPoints && targetPts ? targetPts / riskPoints : undefined,
+    outcome,
+    session: sessionLabel(t.entryTime, settings.sessions),
+    day: tradingDay(t.exitTime ?? t.entryTime),
+    durationMin: dur !== undefined && dur >= 0 ? dur : undefined,
+    miniEq: miniEquivalent(contracts, inst),
+  };
 }
 
-/** Money at risk: explicit value, or distance to stop × size × point value. */
-export function tradeRisk(t: Trade): number | undefined {
-  if (t.riskOverride !== undefined && t.riskOverride > 0) return t.riskOverride;
-  if (t.stopLoss === undefined || !t.stopLoss) return undefined;
-  const r = Math.abs(t.entryPrice - t.stopLoss) * t.size * (t.pointValue || 1);
-  return r > 0 ? r : undefined;
-}
-
-/** Realized R multiple. */
-export function tradeR(t: Trade): number | undefined {
-  const pnl = tradePnl(t);
-  const risk = tradeRisk(t);
-  if (pnl === undefined || !risk) return undefined;
-  return pnl / risk;
-}
-
-/** Planned reward:risk from TP and SL. */
-export function plannedRR(t: Trade): number | undefined {
-  if (!t.stopLoss || !t.takeProfit) return undefined;
-  const risk = Math.abs(t.entryPrice - t.stopLoss);
-  const reward = Math.abs(t.takeProfit - t.entryPrice);
-  return risk > 0 ? reward / risk : undefined;
-}
-
-export function outcome(t: Trade): Outcome {
-  const pnl = tradePnl(t);
-  if (pnl === undefined) return 'open';
-  const r = tradeR(t);
-  if (r !== undefined ? Math.abs(r) < BE_THRESHOLD_R : pnl === 0) return 'be';
-  return pnl > 0 ? 'win' : 'loss';
-}
-
-export function durationMinutes(t: Trade): number | undefined {
-  if (!t.exitTime) return undefined;
-  const ms = new Date(t.exitTime).getTime() - new Date(t.entryTime).getTime();
-  return ms >= 0 ? ms / 60000 : undefined;
-}
-
-export function riskPercent(t: Trade, settings: Settings): number | undefined {
-  const risk = tradeRisk(t);
-  if (!risk || !settings.startingBalance) return undefined;
-  return (risk / settings.startingBalance) * 100;
-}
-
-export function tradeSession(t: Trade, settings: Settings): string {
-  return sessionLabel(t.entryTime, settings.sessions);
+export function enrichAll(trades: Trade[], settings: Settings): ETrade[] {
+  return trades
+    .map((t) => enrichTrade(t, settings))
+    .sort((a, b) => new Date(a.exitTime ?? a.entryTime).getTime() - new Date(b.exitTime ?? b.entryTime).getTime());
 }
 
 export function uid(): string {
-  return (globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36));
+  return globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function fmtMoney(v: number | undefined, currency = 'USD', signed = false): string {
+// ---------- formatting ----------
+
+const usd0 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+const usd2 = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** $1,234.50 / −$80.00 / +$12.00 (signed) */
+export function money(v: number | undefined, opts: { signed?: boolean; cents?: boolean } = {}): string {
   if (v === undefined || !Number.isFinite(v)) return '—';
-  const s = formatCurrency(v, currency, 2);
-  return signed && v > 0 ? '+' + s : s;
+  const cents = opts.cents ?? Math.abs(v) < 10_000;
+  const s = (cents ? usd2 : usd0).format(Math.abs(v));
+  if (v < 0) return '−' + s;
+  return opts.signed && v > 0 ? '+' + s : s;
+}
+
+/** Short money: $12.4K */
+export function moneyShort(v: number): string {
+  const a = Math.abs(v);
+  const s = a >= 1000 ? `$${(a / 1000).toFixed(a >= 10_000 ? 0 : 1)}K` : `$${Math.round(a)}`;
+  return (v < 0 ? '−' : '') + s;
 }
 
 export function fmtNum(v: number | undefined, digits = 2, signed = false): string {
   if (v === undefined || !Number.isFinite(v)) return '—';
-  const s = v.toFixed(digits);
+  const s = Math.abs(v).toFixed(digits);
+  if (v < 0 && Number(s) !== 0) return '−' + s;
   return signed && v > 0 ? '+' + s : s;
 }
 
-export function fmtPct(v: number | undefined, digits = 1): string {
+export function fmtR(v: number | undefined): string {
+  return v === undefined ? '—' : fmtNum(v, 2, true) + 'R';
+}
+
+export function fmtPct(v: number | undefined, digits = 0): string {
   if (v === undefined || !Number.isFinite(v)) return '—';
   return `${v.toFixed(digits)}%`;
 }
 
-/** Currency format that tolerates non-ISO codes like USDT. */
-export function formatCurrency(v: number, currency: string, digits: number): string {
-  try {
-    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency, maximumFractionDigits: digits }).format(v);
-  } catch {
-    return `${new Intl.NumberFormat('ru-RU', { maximumFractionDigits: digits }).format(v)} ${currency}`;
-  }
+export function fmtPrice(v: number | undefined): string {
+  if (v === undefined || !Number.isFinite(v)) return '—';
+  return Number(v.toFixed(6)).toLocaleString('en-US', { maximumFractionDigits: 6 });
 }
+
+export const tone = (v: number | undefined): 'pos' | 'neg' | '' =>
+  v === undefined || Math.abs(v) < 1e-9 ? '' : v > 0 ? 'pos' : 'neg';

@@ -28,26 +28,41 @@ export function isTradingViewUrl(url: string): boolean {
   return /tradingview\.com/i.test(url);
 }
 
-/** Read an image file/blob as a downscaled JPEG data URL (keeps the local DB small). */
-export function imageToDataUrl(file: Blob, maxSide = 1800, quality = 0.85): Promise<string> {
+function loadImage(file: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error);
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => resolve(String(reader.result));
-      img.onload = () => {
-        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.round(img.width * scale);
-        canvas.height = Math.round(img.height * scale);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return resolve(String(reader.result));
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
-      };
-      img.src = String(reader.result);
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Не удалось прочитать изображение'));
+    };
+    img.src = url;
   });
+}
+
+function drawScaled(img: HTMLImageElement, maxSide: number): HTMLCanvasElement {
+  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  const ctx = canvas.getContext('2d')!;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}
+
+/** Downscaled JPEG blob — for upload to synced storage. */
+export async function imageToBlob(file: Blob, maxSide = 1600, quality = 0.82): Promise<Blob> {
+  const canvas = drawScaled(await loadImage(file), maxSide);
+  return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('encode'))), 'image/jpeg', quality));
+}
+
+/** Downscaled JPEG data URL — for device-only storage. */
+export async function imageToDataUrl(file: Blob, maxSide = 1400, quality = 0.78): Promise<string> {
+  return drawScaled(await loadImage(file), maxSide).toDataURL('image/jpeg', quality);
 }

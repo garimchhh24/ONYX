@@ -1,124 +1,187 @@
 import { useRef, useState } from 'react';
 import { TIMEFRAMES, TIMEFRAME_LABELS, type Analysis, type Timeframe } from '../types';
 import { uid } from '../lib/calc';
-import { chartImageUrl, imageToDataUrl } from '../lib/tradingview';
-import { Lightbox } from './common';
+import { chartImageUrl, imageToBlob, imageToDataUrl } from '../lib/tradingview';
+import { toast, uploadImage, useStore } from '../store';
+import { Icon, Lightbox, Sheet, memorize, remember } from '../ui';
 
-/**
- * One slot per timeframe. Each slot accepts:
- *  - a TradingView snapshot link (Alt+S → "Copy link") — image is shown automatically
- *  - any chart/idea link
- *  - Ctrl+V of a screenshot, drag & drop, or a file upload
- */
-export function Analyses({ value, onChange }: { value: Analysis[]; onChange: (a: Analysis[]) => void }) {
-  const [zoom, setZoom] = useState<string | null>(null);
-  const [showAll, setShowAll] = useState(false);
-  const used = new Set(value.map((a) => a.timeframe));
-  const visible = showAll ? TIMEFRAMES : TIMEFRAMES.filter((tf) => used.has(tf) || ['1D', '4H', '1H', '15m'].includes(tf));
+export function shotSrc(a: Analysis): string | undefined {
+  if (a.assetId) return '/_blob/' + a.assetId;
+  return a.imageData ?? a.imageUrl;
+}
 
-  const add = (a: Omit<Analysis, 'id' | 'createdAt'>) => onChange([...value, { ...a, id: uid(), createdAt: new Date().toISOString() }]);
-  const update = (id: string, patch: Partial<Analysis>) => onChange(value.map((a) => (a.id === id ? { ...a, ...patch } : a)));
-  const remove = (id: string) => onChange(value.filter((a) => a.id !== id));
-
+function Thumb({ a, onClick, onRemove }: { a: Analysis; onClick: () => void; onRemove?: () => void }) {
+  const [broken, setBroken] = useState(false);
+  const src = shotSrc(a);
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div className="notice">
-        На TradingView нажмите <b>Alt + S</b> (или кнопку камеры → «Копировать ссылку») и вставьте ссылку в нужный таймфрейм — скриншот подтянется автоматически.
-        Также можно вставить картинку через <b>Ctrl + V</b>, перетащить файл или загрузить его.
-      </div>
-      <div className="tf-grid">
-        {visible.map((tf) => (
-          <TfSlot key={tf} tf={tf} items={value.filter((a) => a.timeframe === tf)} onAdd={add} onUpdate={update} onRemove={remove} onZoom={setZoom} />
-        ))}
-      </div>
-      {!showAll && (
-        <div>
-          <button type="button" className="btn small" onClick={() => setShowAll(true)}>Показать все таймфреймы (Monthly … 1min)</button>
-        </div>
+    <div className="shot">
+      <button type="button" onClick={onClick} style={{ all: 'unset', display: 'block', width: '100%', cursor: 'pointer' }} aria-label={`Анализ ${TIMEFRAME_LABELS[a.timeframe]}`}>
+        {src && !broken ? (
+          <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} />
+        ) : (
+          <div className="ph">
+            <span><Icon name="link" size={20} /><br />График TradingView</span>
+          </div>
+        )}
+      </button>
+      <span className="tf">{TIMEFRAME_LABELS[a.timeframe]}</span>
+      {onRemove && (
+        <button type="button" className="x" onClick={onRemove} aria-label="Удалить">
+          <Icon name="x" size={16} stroke={2.2} />
+        </button>
       )}
-      {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+      {a.note && <div className="note">{a.note}</div>}
     </div>
   );
 }
 
-function TfSlot({
-  tf, items, onAdd, onUpdate, onRemove, onZoom,
-}: {
-  tf: Timeframe;
-  items: Analysis[];
-  onAdd: (a: Omit<Analysis, 'id' | 'createdAt'>) => void;
-  onUpdate: (id: string, p: Partial<Analysis>) => void;
-  onRemove: (id: string) => void;
-  onZoom: (src: string) => void;
-}) {
+/** Read-only gallery for trade details, grouped by timeframe order. */
+export function AnalysesView({ value }: { value: Analysis[] }) {
+  const [open, setOpen] = useState<Analysis | null>(null);
+  const [zoom, setZoom] = useState<string | null>(null);
+  const sorted = [...value].sort((a, b) => TIMEFRAMES.indexOf(a.timeframe) - TIMEFRAMES.indexOf(b.timeframe));
+  if (!value.length) return <span className="muted small">Скриншотов нет</span>;
+  return (
+    <>
+      <div className="shots">
+        {sorted.map((a) => (
+          <Thumb key={a.id} a={a} onClick={() => setOpen(a)} />
+        ))}
+      </div>
+      {open && (
+        <Sheet title={`Анализ · ${TIMEFRAME_LABELS[open.timeframe]}`} onClose={() => setOpen(null)}>
+          {shotSrc(open) && <img src={shotSrc(open)} alt="" style={{ borderRadius: 12, width: '100%' }} onClick={() => setZoom(shotSrc(open)!)} />}
+          {open.note && <p className="dim" style={{ margin: 0 }}>{open.note}</p>}
+          {open.url && <a className="btn block" href={open.url} target="_blank" rel="noreferrer"><Icon name="link" size={18} />Открыть на TradingView</a>}
+        </Sheet>
+      )}
+      {zoom && <Lightbox src={zoom} onClose={() => setZoom(null)} />}
+    </>
+  );
+}
+
+/** Editor: pick a timeframe, then add a screenshot or a TradingView link. */
+export function AnalysesEditor({ value, onChange }: { value: Analysis[]; onChange: (a: Analysis[]) => void }) {
+  const { backend } = useStore();
+  const [tf, setTf] = useState<Timeframe>(() => remember<Timeframe>('tf', '15m'));
   const [link, setLink] = useState('');
-  const [drag, setDrag] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [edit, setEdit] = useState<Analysis | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const pickTf = (t: Timeframe) => {
+    setTf(t);
+    memorize('tf', t);
+  };
+  const add = (a: Omit<Analysis, 'id' | 'createdAt' | 'timeframe'>) => onChange([...value, { ...a, timeframe: tf, id: uid(), createdAt: new Date().toISOString() }]);
 
   const addLink = (raw: string) => {
     const url = raw.trim();
-    if (!/^https?:\/\//i.test(url)) return false;
-    onAdd({ timeframe: tf, url, imageUrl: chartImageUrl(url) });
+    if (!/^https?:\/\//i.test(url)) {
+      toast('Вставьте ссылку, начинающуюся с https://');
+      return;
+    }
+    add({ url, imageUrl: chartImageUrl(url) });
     setLink('');
-    return true;
+    setLinkOpen(false);
   };
+
   const addFiles = async (files: FileList | File[]) => {
-    for (const f of Array.from(files)) {
-      if (!f.type.startsWith('image/')) continue;
-      onAdd({ timeframe: tf, imageData: await imageToDataUrl(f) });
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (!list.length) return;
+    setBusy(true);
+    try {
+      const added: Analysis[] = [];
+      for (const f of list) {
+        let assetId: string | undefined;
+        if (backend === 'cloud') assetId = await uploadImage(await imageToBlob(f));
+        const imageData = assetId ? undefined : await imageToDataUrl(f);
+        added.push({ id: uid(), createdAt: new Date().toISOString(), timeframe: tf, assetId, imageData });
+      }
+      onChange([...value, ...added]);
+    } catch {
+      toast('Не удалось добавить изображение');
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <div
-      className={`tf${drag ? ' drag' : ''}`}
-      tabIndex={0}
+      className="stack"
       onPaste={(e) => {
         const files = [...e.clipboardData.items].filter((i) => i.type.startsWith('image/')).map((i) => i.getAsFile()).filter((f): f is File => !!f);
         if (files.length) {
           e.preventDefault();
           void addFiles(files);
-        } else if ((e.target as HTMLElement).tagName !== 'INPUT') {
-          const text = e.clipboardData.getData('text');
-          if (addLink(text)) e.preventDefault();
         }
       }}
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-      onDragLeave={() => setDrag(false)}
-      onDrop={(e) => { e.preventDefault(); setDrag(false); void addFiles(e.dataTransfer.files); }}
     >
-      <div className="tf-head">
-        <b>{TIMEFRAME_LABELS[tf]}</b>
-        <span className="muted small">{items.length ? `${items.length} шт.` : ''}</span>
+      <div className="chips scroll">
+        {TIMEFRAMES.map((t) => (
+          <button key={t} type="button" className={`chip sym${tf === t ? ' on' : ''}`} onClick={() => pickTf(t)}>
+            {TIMEFRAME_LABELS[t]}
+            {value.some((a) => a.timeframe === t) && <small>●</small>}
+          </button>
+        ))}
       </div>
-      {items.map((a) => {
-        const src = a.imageData ?? a.imageUrl;
-        return (
-          <div className="shot" key={a.id}>
-            {src && <img src={src} alt={`Анализ ${TIMEFRAME_LABELS[tf]}`} loading="lazy" onClick={() => onZoom(src)} onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
-            <button type="button" className="btn small x" onClick={() => onRemove(a.id)} aria-label="Удалить">✕</button>
-            <div className="meta">
-              {a.url && <a href={a.url} target="_blank" rel="noreferrer" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.url}</a>}
-              <input placeholder="Комментарий к анализу" value={a.note ?? ''} onChange={(e) => onUpdate(a.id, { note: e.target.value })} />
-            </div>
+      <div className="grid2">
+        <button type="button" className="btn" onClick={() => fileRef.current?.click()} disabled={busy}>
+          <Icon name="camera" size={19} />
+          {busy ? 'Загрузка…' : 'Скриншот'}
+        </button>
+        <button type="button" className="btn" onClick={() => setLinkOpen((v) => !v)}>
+          <Icon name="link" size={19} />
+          Ссылка TV
+        </button>
+      </div>
+      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ''; }} />
+      {linkOpen && (
+        <div className="row">
+          <input
+            className="input grow"
+            placeholder="https://www.tradingview.com/x/…"
+            value={link}
+            autoFocus
+            inputMode="url"
+            onChange={(e) => setLink(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLink(link); } }}
+          />
+          <button type="button" className="btn chrome-btn" onClick={() => addLink(link)}>OK</button>
+        </div>
+      )}
+      <span className="tiny muted">TradingView: камера → «Скопировать ссылку» и вставьте сюда. Или сделайте скриншот графика и прикрепите фото — к выбранному таймфрейму.</span>
+      {value.length > 0 && (
+        <div className="shots">
+          {[...value].sort((a, b) => TIMEFRAMES.indexOf(a.timeframe) - TIMEFRAMES.indexOf(b.timeframe)).map((a) => (
+            <Thumb key={a.id} a={a} onClick={() => setEdit(a)} onRemove={() => onChange(value.filter((x) => x.id !== a.id))} />
+          ))}
+        </div>
+      )}
+      {edit && (
+        <Sheet title="Анализ" onClose={() => setEdit(null)}>
+          {shotSrc(edit) && <img src={shotSrc(edit)} alt="" style={{ borderRadius: 12, width: '100%' }} />}
+          <div className="chips scroll">
+            {TIMEFRAMES.map((t) => (
+              <button key={t} type="button" className={`chip sym${edit.timeframe === t ? ' on' : ''}`} onClick={() => setEdit({ ...edit, timeframe: t })}>
+                {TIMEFRAME_LABELS[t]}
+              </button>
+            ))}
           </div>
-        );
-      })}
-      <div className="row" style={{ flexWrap: 'nowrap' }}>
-        <input
-          placeholder="Ссылка TradingView…"
-          value={link}
-          onChange={(e) => setLink(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addLink(link); } }}
-          onPaste={(e) => {
-            const text = e.clipboardData.getData('text');
-            if (/^https?:\/\//i.test(text.trim())) { e.preventDefault(); e.stopPropagation(); addLink(text); }
-          }}
-        />
-        <button type="button" className="btn small" onClick={() => addLink(link)} disabled={!link.trim()}>+</button>
-        <button type="button" className="btn small" onClick={() => fileRef.current?.click()} title="Загрузить скриншот">📷</button>
-        <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { if (e.target.files) void addFiles(e.target.files); e.target.value = ''; }} />
-      </div>
+          <textarea className="input" placeholder="Что видите на этом таймфрейме?" value={edit.note ?? ''} onChange={(e) => setEdit({ ...edit, note: e.target.value })} />
+          <button
+            type="button"
+            className="btn chrome-btn block"
+            onClick={() => {
+              onChange(value.map((x) => (x.id === edit.id ? { ...edit, note: edit.note?.trim() || undefined } : x)));
+              setEdit(null);
+            }}
+          >
+            Готово
+          </button>
+        </Sheet>
+      )}
     </div>
   );
 }

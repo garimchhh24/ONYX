@@ -1,129 +1,125 @@
 import { useMemo, useState } from 'react';
-import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis,
-} from 'recharts';
-import type { Settings, Trade } from '../types';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import type { ETrade } from '../lib/calc';
+import { money, moneyShort, fmtR, fmtPct } from '../lib/calc';
 import type { EquityPoint, GroupRow } from '../lib/stats';
 import { dailyPnl, rHistogram } from '../lib/stats';
-import { fmtMoney, fmtNum, fmtPct } from '../lib/calc';
-import { useChartColors } from './common';
+import { addDaysKey, todayTradingDay } from '../lib/time';
 
-const compact = (v: number) => new Intl.NumberFormat('ru-RU', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
+export const C = { pos: '#3987e5', neg: '#e66767', line: '#d9d9d9', grid: '#1d1d21', zero: '#3a3a3f', muted: '#7b7b7f', surface: '#0e0e10' };
 
-export function EquityChart({ data, settings }: { data: EquityPoint[]; settings: Settings }) {
-  const c = useChartColors();
-  const dates = (iso: string) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: '2-digit', month: 'short' }) : 'Старт');
-  return (
-    <ResponsiveContainer width="100%" height={260}>
-      <AreaChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-        <defs>
-          <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={c.line} stopOpacity={0.22} />
-            <stop offset="100%" stopColor={c.line} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <CartesianGrid vertical={false} strokeDasharray="0" />
-        <XAxis dataKey="i" tickLine={false} axisLine={false} minTickGap={30} tickFormatter={(i) => dates(data[i]?.date ?? '')} />
-        <YAxis tickLine={false} axisLine={false} width={56} tickFormatter={compact} domain={['auto', 'auto']} />
-        <ReferenceLine y={settings.startingBalance} stroke={c.zero} strokeDasharray="4 4" />
-        <Tooltip
-          cursor={{ stroke: c.muted, strokeWidth: 1 }}
-          content={({ active, payload }) => {
-            const p = payload?.[0]?.payload as EquityPoint | undefined;
-            if (!active || !p) return null;
-            return (
-              <div className="chart-tip">
-                <div className="muted">{p.i ? `Сделка #${p.i} · ${p.symbol} · ${dates(p.date)}` : 'Стартовый баланс'}</div>
-                <div>Баланс: <b>{fmtMoney(p.equity, settings.currency)}</b></div>
-                {p.i > 0 && <div>Результат: <b className={p.pnl >= 0 ? 'pos' : 'neg'}>{fmtMoney(p.pnl, settings.currency, true)}</b></div>}
-                {p.drawdown < 0 && <div>Просадка от пика: <b className="neg">{fmtMoney(p.drawdown, settings.currency)}</b></div>}
-              </div>
-            );
-          }}
-        />
-        <Area type="monotone" dataKey="equity" stroke={c.line} strokeWidth={2} fill="url(#eqFill)" dot={false} activeDot={{ r: 4, strokeWidth: 2, stroke: c.surface }} isAnimationActive={false} />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
+const shortDate = (iso: string) => (iso ? new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }) : 'старт');
 
-export function DrawdownChart({ data, settings }: { data: EquityPoint[]; settings: Settings }) {
-  const c = useChartColors();
-  return (
-    <ResponsiveContainer width="100%" height={120}>
-      <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-        <CartesianGrid vertical={false} />
-        <XAxis dataKey="i" hide />
-        <YAxis tickLine={false} axisLine={false} width={56} tickFormatter={compact} />
-        <Tooltip
-          cursor={{ stroke: c.muted, strokeWidth: 1 }}
-          content={({ active, payload }) => {
-            const p = payload?.[0]?.payload as EquityPoint | undefined;
-            if (!active || !p) return null;
-            return <div className="chart-tip">Сделка #{p.i}: <b>{fmtMoney(p.drawdown, settings.currency)}</b></div>;
-          }}
-        />
-        <Area type="stepAfter" dataKey="drawdown" stroke={c.neg} strokeWidth={2} fill={c.neg} fillOpacity={0.15} dot={false} isAnimationActive={false} />
-      </AreaChart>
-    </ResponsiveContainer>
-  );
-}
-
-/** Diverging bar chart of PnL per group (session / weekday / hour). */
-export function PnlBars({ rows, settings, height = 220 }: { rows: GroupRow[]; settings: Settings; height?: number }) {
-  const c = useChartColors();
-  if (!rows.length) return <div className="muted small">Нет данных</div>;
+export function EquityChart({ data, height = 200 }: { data: EquityPoint[]; height?: number }) {
+  if (data.length < 2) return <div className="muted small">Пока нет закрытых сделок</div>;
   return (
     <ResponsiveContainer width="100%" height={height}>
-      <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap={rows.length > 12 ? 2 : '20%'}>
+      <AreaChart data={data} margin={{ top: 8, right: 4, left: -8, bottom: 0 }}>
+        <defs>
+          <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ffffff" stopOpacity={0.2} />
+            <stop offset="100%" stopColor="#ffffff" stopOpacity={0} />
+          </linearGradient>
+          <linearGradient id="eqStroke" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#ffffff" />
+            <stop offset="100%" stopColor="#9a9a9a" />
+          </linearGradient>
+        </defs>
         <CartesianGrid vertical={false} />
-        <XAxis dataKey="key" tickLine={false} axisLine={false} interval={rows.length > 12 ? 2 : 0} />
-        <YAxis tickLine={false} axisLine={false} width={56} tickFormatter={compact} />
-        <ReferenceLine y={0} stroke={c.zero} />
+        <XAxis dataKey="i" tickLine={false} axisLine={false} minTickGap={40} tickFormatter={(i) => shortDate(data[i]?.date ?? '')} />
+        <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={moneyShort} />
+        <ReferenceLine y={0} stroke={C.zero} strokeDasharray="3 4" />
         <Tooltip
-          cursor={{ fill: c.grid, fillOpacity: 0.5 }}
+          cursor={{ stroke: C.muted, strokeWidth: 1 }}
           content={({ active, payload }) => {
-            const r = payload?.[0]?.payload as GroupRow | undefined;
-            if (!active || !r) return null;
+            const p = payload?.[0]?.payload as EquityPoint | undefined;
+            if (!active || !p || !p.i) return null;
             return (
               <div className="chart-tip">
-                <div><b>{r.key}</b></div>
-                <div>P&L: <b className={r.pnl >= 0 ? 'pos' : 'neg'}>{fmtMoney(r.pnl, settings.currency, true)}</b></div>
-                <div>Сделок: <b>{r.trades}</b> · Винрейт: <b>{fmtPct(r.winRate, 0)}</b></div>
-                <div>Средний R: <b>{fmtNum(r.avgR, 2, true)}</b></div>
+                <div className="muted">#{p.i} · {p.symbol} · {shortDate(p.date)}</div>
+                <div>Итог: <b className="num">{money(p.equity, { signed: true })}</b></div>
+                <div>Сделка: <b className={p.pnl >= 0 ? 'pos' : 'neg'}>{money(p.pnl, { signed: true })}</b></div>
+                {p.drawdown < 0 && <div>От пика: <b className="neg">{money(p.drawdown)}</b></div>}
               </div>
             );
           }}
         />
+        <Area type="monotone" dataKey="equity" stroke="url(#eqStroke)" strokeWidth={2} fill="url(#eqFill)" dot={false} activeDot={{ r: 4, fill: '#fff', stroke: C.surface, strokeWidth: 2 }} isAnimationActive={false} />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+const barTip = ({ active, payload }: { active?: boolean; payload?: readonly { payload?: unknown }[] }) => {
+  const r = payload?.[0]?.payload as GroupRow | undefined;
+  if (!active || !r) return null;
+  return (
+    <div className="chart-tip">
+      <b>{r.key}</b>
+      <div>P&L: <b className={r.pnl >= 0 ? 'pos' : 'neg'}>{money(r.pnl, { signed: true })}</b></div>
+      <div>{r.trades} сд. · винрейт {fmtPct(r.winRate)} · {fmtR(r.avgR)}</div>
+    </div>
+  );
+};
+
+/** Horizontal bars — long category names (sessions) stay readable on a phone. */
+export function PnlBarsH({ rows }: { rows: GroupRow[] }) {
+  if (!rows.length) return <div className="muted small">Нет данных</div>;
+  return (
+    <ResponsiveContainer width="100%" height={rows.length * 36 + 28}>
+      <BarChart data={rows} layout="vertical" margin={{ top: 4, right: 8, left: 0, bottom: 0 }} barCategoryGap="22%">
+        <CartesianGrid horizontal={false} />
+        <XAxis type="number" tickLine={false} axisLine={false} tickFormatter={moneyShort} />
+        <YAxis type="category" dataKey="key" tickLine={false} axisLine={false} width={104} tick={{ fontSize: 11.5, fill: '#b7b7b1' }} />
+        <ReferenceLine x={0} stroke={C.zero} />
+        <Tooltip cursor={{ fill: '#ffffff', fillOpacity: 0.04 }} content={barTip} />
         <Bar dataKey="pnl" radius={[3, 3, 3, 3]} isAnimationActive={false}>
-          {rows.map((r) => <Cell key={r.key} fill={r.pnl >= 0 ? c.pos : c.neg} />)}
+          {rows.map((r) => <Cell key={r.key} fill={r.pnl >= 0 ? C.pos : C.neg} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
   );
 }
 
-export function RHistogram({ trades }: { trades: Trade[] }) {
-  const c = useChartColors();
+export function PnlBars({ rows, height = 200 }: { rows: GroupRow[]; height?: number }) {
+  if (!rows.length) return <div className="muted small">Нет данных</div>;
+  const dense = rows.length > 8;
+  return (
+    <ResponsiveContainer width="100%" height={height}>
+      <BarChart data={rows} margin={{ top: 8, right: 4, left: -8, bottom: 0 }} barCategoryGap={dense ? 2 : '18%'}>
+        <CartesianGrid vertical={false} />
+        <XAxis dataKey="key" tickLine={false} axisLine={false} interval={dense ? 'preserveStartEnd' : 0} tick={{ fontSize: 10 }} />
+        <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={moneyShort} />
+        <ReferenceLine y={0} stroke={C.zero} />
+        <Tooltip cursor={{ fill: '#ffffff', fillOpacity: 0.04 }} content={barTip} />
+        <Bar dataKey="pnl" radius={[3, 3, 3, 3]} isAnimationActive={false}>
+          {rows.map((r) => <Cell key={r.key} fill={r.pnl >= 0 ? C.pos : C.neg} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function RHistogram({ trades }: { trades: ETrade[] }) {
   const data = useMemo(() => rHistogram(trades), [trades]);
   const total = data.reduce((a, b) => a + b.count, 0);
-  if (!total) return <div className="muted small">Укажите стоп-лосс или риск в сделках, чтобы видеть распределение R.</div>;
+  if (!total) return <div className="muted small">Укажите стоп (в пунктах, ценой или риском в $), чтобы видеть результат в R.</div>;
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <BarChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap={2}>
+    <ResponsiveContainer width="100%" height={170}>
+      <BarChart data={data} margin={{ top: 8, right: 4, left: -24, bottom: 0 }} barCategoryGap={2}>
         <CartesianGrid vertical={false} />
-        <XAxis dataKey="bucket" tickLine={false} axisLine={false} interval={0} angle={-35} textAnchor="end" height={44} />
-        <YAxis tickLine={false} axisLine={false} width={32} allowDecimals={false} />
+        <XAxis dataKey="bucket" tickLine={false} axisLine={false} interval={1} tick={{ fontSize: 9.5 }} />
+        <YAxis tickLine={false} axisLine={false} width={40} allowDecimals={false} />
         <Tooltip
-          cursor={{ fill: c.grid, fillOpacity: 0.5 }}
+          cursor={{ fill: '#ffffff', fillOpacity: 0.04 }}
           content={({ active, payload }) => {
             const r = payload?.[0]?.payload as { bucket: string; count: number } | undefined;
             if (!active || !r) return null;
-            return <div className="chart-tip">{r.bucket}R: <b>{r.count}</b> сделок ({((r.count / total) * 100).toFixed(0)}%)</div>;
+            return <div className="chart-tip">{r.bucket}R: <b>{r.count}</b> сд. ({((r.count / total) * 100).toFixed(0)}%)</div>;
           }}
         />
         <Bar dataKey="count" radius={[3, 3, 0, 0]} isAnimationActive={false}>
-          {data.map((d) => <Cell key={d.bucket} fill={d.from >= 0 ? c.pos : c.neg} />)}
+          {data.map((d) => <Cell key={d.bucket} fill={d.from >= 0 ? C.pos : C.neg} />)}
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -132,51 +128,45 @@ export function RHistogram({ trades }: { trades: Trade[] }) {
 
 const MONTHS = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 
-export function PnlCalendar({ trades, settings }: { trades: Trade[]; settings: Settings }) {
-  const daily = useMemo(() => dailyPnl(trades, settings), [trades, settings]);
+export function PnlCalendar({ trades }: { trades: ETrade[] }) {
+  const daily = useMemo(() => dailyPnl(trades), [trades]);
   const latest = useMemo(() => {
-    const keys = [...daily.keys()].sort();
-    const k = keys.at(-1);
-    return k ? { y: Number(k.slice(0, 4)), m: Number(k.slice(5, 7)) - 1 } : { y: new Date().getFullYear(), m: new Date().getMonth() };
+    const k = [...daily.keys()].sort().at(-1) ?? todayTradingDay();
+    return { y: Number(k.slice(0, 4)), m: Number(k.slice(5, 7)) - 1 };
   }, [daily]);
-  const [cursor, setCursor] = useState<{ y: number; m: number } | null>(null);
-  const { y, m } = cursor ?? latest;
-  const first = new Date(Date.UTC(y, m, 1));
-  const lead = (first.getUTCDay() + 6) % 7;
+  const [cur, setCur] = useState<{ y: number; m: number } | null>(null);
+  const { y, m } = cur ?? latest;
+  const lead = (new Date(Date.UTC(y, m, 1)).getUTCDay() + 6) % 7;
   const days = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  const keyOf = (d: number) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-  const monthVals = Array.from({ length: days }, (_, i) => daily.get(keyOf(i + 1))?.pnl ?? 0);
-  const maxAbs = Math.max(1, ...monthVals.map(Math.abs));
-  const monthTotal = monthVals.reduce((a, b) => a + b, 0);
+  const key = (d: number) => `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const vals = Array.from({ length: days }, (_, i) => daily.get(key(i + 1))?.pnl ?? 0);
+  const maxAbs = Math.max(1, ...vals.map(Math.abs));
+  const total = vals.reduce((a, b) => a + b, 0);
   const shift = (d: number) => {
     const mm = m + d;
-    setCursor({ y: y + Math.floor(mm / 12), m: ((mm % 12) + 12) % 12 });
+    setCur({ y: y + Math.floor(mm / 12), m: ((mm % 12) + 12) % 12 });
   };
   return (
-    <div>
-      <div className="row" style={{ marginBottom: 8 }}>
-        <button className="btn small" onClick={() => shift(-1)} aria-label="Предыдущий месяц">‹</button>
-        <b style={{ minWidth: 130, textAlign: 'center' }}>{MONTHS[m]} {y}</b>
-        <button className="btn small" onClick={() => shift(1)} aria-label="Следующий месяц">›</button>
-        <span className="spacer" />
-        <span className={`num ${monthTotal >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(monthTotal, settings.currency, true)}</span>
+    <div className="stack" style={{ gap: 10 }}>
+      <div className="row between">
+        <div className="row">
+          <button className="icon-btn" style={{ width: 34, height: 34 }} onClick={() => shift(-1)} aria-label="Предыдущий месяц">‹</button>
+          <b className="display" style={{ minWidth: 112, textAlign: 'center' }}>{MONTHS[m]} {y}</b>
+          <button className="icon-btn" style={{ width: 34, height: 34 }} onClick={() => shift(1)} aria-label="Следующий месяц">›</button>
+        </div>
+        <b className={`display num ${total >= 0 ? 'pos' : 'neg'}`}>{money(total, { signed: true, cents: false })}</b>
       </div>
       <div className="cal">
         {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((d) => <div key={d} className="dow">{d}</div>)}
-        {Array.from({ length: lead }, (_, i) => <div key={'e' + i} className="day empty" />)}
+        {Array.from({ length: lead }, (_, i) => <div key={'e' + i} className="d e" />)}
         {Array.from({ length: days }, (_, i) => {
-          const v = daily.get(keyOf(i + 1));
-          const pct = v ? Math.round(18 + (Math.abs(v.pnl) / maxAbs) * 62) : 0;
-          const bg = v ? `color-mix(in oklab, var(${v.pnl >= 0 ? '--pos' : '--neg'}) ${pct}%, var(--neutral))` : undefined;
+          const v = daily.get(key(i + 1));
+          const pct = v ? Math.round(22 + (Math.abs(v.pnl) / maxAbs) * 58) : 0;
+          const bg = v ? `color-mix(in oklab, ${v.pnl >= 0 ? C.pos : C.neg} ${pct}%, #151518)` : undefined;
           return (
-            <div key={i} className="day" style={{ background: bg }} title={v ? `${keyOf(i + 1)}: ${fmtMoney(v.pnl, settings.currency, true)}, сделок: ${v.trades}` : keyOf(i + 1)}>
-              <span className="d">{i + 1}</span>
-              {v && (
-                <>
-                  <span className="p num">{compact(v.pnl)}</span>
-                  <span className="t">{v.trades} сд.</span>
-                </>
-              )}
+            <div key={i} className="d" style={{ background: bg }} title={v ? `${key(i + 1)}: ${money(v.pnl, { signed: true })}, ${v.trades} сд.` : undefined}>
+              <span>{i + 1}</span>
+              {v && <b className="num">{moneyShort(v.pnl)}</b>}
             </div>
           );
         })}
@@ -185,46 +175,57 @@ export function PnlCalendar({ trades, settings }: { trades: Trade[]; settings: S
   );
 }
 
-export function GroupTable({ rows, settings, label }: { rows: GroupRow[]; settings: Settings; label: string }) {
-  if (!rows.length) return <div className="muted small">Нет данных</div>;
+/** Compact list with a diverging bar — reads well on a phone. */
+export function GroupList({ rows, empty = 'Нет данных' }: { rows: GroupRow[]; empty?: string }) {
+  if (!rows.length) return <div className="muted small">{empty}</div>;
   const maxAbs = Math.max(1, ...rows.map((r) => Math.abs(r.pnl)));
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>{label}</th>
-            <th className="r">Сделок</th>
-            <th className="r">Винрейт</th>
-            <th className="r">Ср. R</th>
-            <th className="r">PF</th>
-            <th className="r">P&L</th>
-            <th aria-hidden />
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.key}>
-              <td>{r.key}</td>
-              <td className="r">{r.trades}</td>
-              <td className="r">{fmtPct(r.winRate, 0)}</td>
-              <td className="r">{fmtNum(r.avgR, 2, true)}</td>
-              <td className="r">{r.profitFactor === Infinity ? '∞' : fmtNum(r.profitFactor)}</td>
-              <td className={`r ${r.pnl >= 0 ? 'pos' : 'neg'}`}>{fmtMoney(r.pnl, settings.currency, true)}</td>
-              <td className="bar-cell">
-                <span
-                  className="bar"
-                  style={{
-                    left: r.pnl >= 0 ? '50%' : `${50 - (Math.abs(r.pnl) / maxAbs) * 50}%`,
-                    width: `${(Math.abs(r.pnl) / maxAbs) * 50}%`,
-                    background: r.pnl >= 0 ? 'var(--pos)' : 'var(--neg)',
-                  }}
-                />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="glist">
+      {rows.map((r) => {
+        const w = (Math.abs(r.pnl) / maxAbs) * 50;
+        return (
+          <div key={r.key}>
+            <span className="k">{r.key}</span>
+            <span className={`p ${r.pnl >= 0 ? 'pos' : 'neg'}`}>{money(r.pnl, { signed: true, cents: false })}</span>
+            <span className="m">{r.trades} сд. · винрейт {fmtPct(r.winRate)} · PF {r.profitFactor === Infinity ? '∞' : r.profitFactor?.toFixed(2) ?? '—'}</span>
+            <span className="m" style={{ textAlign: 'right' }}>{fmtR(r.avgR)}</span>
+            <span className="barline">
+              <span style={{ left: r.pnl >= 0 ? '50%' : `${50 - w}%`, width: `${w}%`, background: r.pnl >= 0 ? C.pos : C.neg }} />
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Mon–Fri strip for the current trading week. */
+export function WeekStrip({ trades }: { trades: ETrade[] }) {
+  const today = todayTradingDay();
+  const daily = useMemo(() => dailyPnl(trades), [trades]);
+  const [y, mo, d] = today.split('-').map(Number);
+  const wd = (new Date(Date.UTC(y, mo - 1, d)).getUTCDay() + 6) % 7;
+  const monday = addDaysKey(today, -wd); // on weekends: the week that just ended
+  const keys = Array.from({ length: 5 }, (_, i) => addDaysKey(monday, i));
+  const total = keys.reduce((a, k) => a + (daily.get(k)?.pnl ?? 0), 0);
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row between">
+        <span className="hero-label">Эта неделя</span>
+        <b className={`display num ${total > 0 ? 'pos' : total < 0 ? 'neg' : ''}`}>{money(total, { signed: true, cents: false })}</b>
+      </div>
+      <div className="week">
+        {keys.map((k, i) => {
+          const v = daily.get(k);
+          const bg = v ? `color-mix(in oklab, ${v.pnl >= 0 ? C.pos : C.neg} 30%, #151518)` : undefined;
+          return (
+            <div key={k} className={k === today ? 'today' : ''} style={{ background: bg }}>
+              <span>{['пн', 'вт', 'ср', 'чт', 'пт'][i]}</span>
+              <b className={v ? '' : 'muted'}>{v ? moneyShort(v.pnl) : '—'}</b>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

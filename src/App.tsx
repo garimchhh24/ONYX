@@ -1,80 +1,119 @@
-import { useMemo, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
-import { db, DEFAULT_SETTINGS, saveTrade } from './db';
-import type { Settings, Trade } from './types';
-import { Dashboard } from './components/Dashboard';
-import { Journal } from './components/Journal';
-import { TradeForm } from './components/TradeForm';
-import { ImportPage } from './components/ImportPage';
-import { SettingsPage } from './components/SettingsPage';
-import { applyFilters, EMPTY_FILTERS, FilterBar, type Filters } from './components/common';
+import { useEffect, useMemo, useState } from 'react';
+import { JournalCtx, NavCtx, type Journal, type Layer, type Nav, type Tab } from './context';
+import { enrichAll } from './lib/calc';
+import { accountState } from './lib/prop';
+import { todayTradingDay } from './lib/time';
+import { useStore } from './store';
+import { Icon, LOGO, Overlay } from './ui';
+import { Home } from './screens/Home';
+import { Journal as JournalScreen } from './screens/Journal';
+import { Stats } from './screens/Stats';
+import { Accounts, AccountDetail } from './screens/Accounts';
+import { AccountEditor } from './screens/AccountEditor';
+import { TradeEditor } from './screens/TradeEditor';
+import { TradeDetail } from './screens/TradeDetail';
+import { Settings } from './screens/Settings';
 
-type View = 'dashboard' | 'journal' | 'trade' | 'import' | 'settings';
+const TABS: { id: Tab; label: string; icon: string }[] = [
+  { id: 'home', label: 'Главная', icon: 'home' },
+  { id: 'journal', label: 'Журнал', icon: 'journal' },
+  { id: 'stats', label: 'Статистика', icon: 'stats' },
+  { id: 'accounts', label: 'Счета', icon: 'accounts' },
+];
+
+function useTradingDay() {
+  const [day, setDay] = useState(todayTradingDay);
+  useEffect(() => {
+    const t = setInterval(() => setDay(todayTradingDay()), 60_000);
+    return () => clearInterval(t);
+  }, []);
+  return day;
+}
 
 export default function App() {
-  const stored = useLiveQuery(() => db.settings.get('settings'), []);
-  const trades = useLiveQuery(() => db.trades.toArray(), []) ?? [];
-  const settings: Settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...(stored ?? {}) }), [stored]);
-  const [view, setView] = useState<View>('dashboard');
-  const [editing, setEditing] = useState<string | null>(null);
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
-  const [settingsKey, setSettingsKey] = useState(0);
+  const s = useStore();
+  const [tab, setTabState] = useState<Tab>('home');
+  const [layers, setLayers] = useState<Layer[]>([]);
+  const today = useTradingDay();
 
-  const filtered = useMemo(() => applyFilters(trades, filters, settings), [trades, filters, settings]);
-  const accounts = useMemo(() => [...new Set(trades.map((t) => t.account).filter((a): a is string => !!a))], [trades]);
-  const editTrade = editing ? trades.find((t) => t.id === editing) : undefined;
+  const trades = useMemo(() => enrichAll(s.trades, s.settings), [s.trades, s.settings]);
+  const journal: Journal = useMemo(() => {
+    const byId = new Map(trades.map((t) => [t.id, t]));
+    const states = new Map(s.accounts.map((a) => [a.id, accountState(a, trades, s.cashflows, today)]));
+    const names = new Map(s.accounts.map((a) => [a.id, a.name]));
+    return { s, trades, byId, states, accountName: (id) => names.get(id) ?? 'удалённый счёт' };
+  }, [s, trades, today]);
 
-  const go = (v: View) => {
-    if (v === 'trade') setEditing(null);
-    setView(v);
-    window.scrollTo({ top: 0 });
-  };
-  const open = (id: string) => {
-    setEditing(id);
-    setView('trade');
-    window.scrollTo({ top: 0 });
-  };
+  const nav: Nav = useMemo(
+    () => ({
+      tab,
+      setTab: (t) => {
+        setLayers([]);
+        setTabState(t);
+        window.scrollTo({ top: 0 });
+      },
+      push: (l) => setLayers((ls) => [...ls, l]),
+      pop: () => setLayers((ls) => ls.slice(0, -1)),
+      replace: (l) => setLayers((ls) => [...ls.slice(0, -1), l]),
+    }),
+    [tab],
+  );
 
-  const nav: [View, string][] = [
-    ['dashboard', 'Статистика'],
-    ['journal', 'Журнал'],
-    ['trade', '+ Сделка'],
-    ['import', 'Импорт'],
-    ['settings', 'Настройки'],
-  ];
+  if (!s.ready) {
+    return (
+      <div className="splash">
+        <div>
+          <img src={LOGO} alt="" />
+          <b className="chrome">ONYX</b>
+        </div>
+      </div>
+    );
+  }
 
+  const top = layers.at(-1);
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand"><span className="brand-mark" aria-hidden />ONYX</div>
-        <nav className="nav">
-          {nav.map(([v, label]) => (
-            <button key={v} className={view === v && !(v === 'trade' && editing) ? 'active' : ''} onClick={() => go(v)}>{label}</button>
-          ))}
-        </nav>
-      </header>
-
-      {(view === 'dashboard' || view === 'journal') && trades.length > 0 && (
-        <FilterBar trades={trades} settings={settings} value={filters} onChange={setFilters} />
-      )}
-
-      {view === 'dashboard' && <Dashboard trades={filtered} settings={settings} />}
-      {view === 'journal' && <Journal trades={filtered} settings={settings} onOpen={open} />}
-      {view === 'trade' && (
-        <TradeForm
-          key={editing ?? 'new'}
-          trade={editTrade}
-          settings={settings}
-          accounts={accounts}
-          onSave={async (t: Trade) => { await saveTrade(t); go('journal'); }}
-          onDelete={editTrade ? async () => { await db.trades.delete(editTrade.id); go('journal'); } : undefined}
-          onCancel={() => go(editing ? 'journal' : 'dashboard')}
-        />
-      )}
-      {view === 'import' && <ImportPage settings={settings} trades={trades} />}
-      {view === 'settings' && (
-        <SettingsPage key={`${settingsKey}-${stored ? 's' : 'd'}`} settings={settings} onSaved={() => { setSettingsKey((k) => k + 1); go('dashboard'); }} />
-      )}
-    </div>
+    <JournalCtx.Provider value={journal}>
+      <NavCtx.Provider value={nav}>
+        <main className="app" aria-hidden={!!top}>
+          {tab === 'home' && <Home />}
+          {tab === 'journal' && <JournalScreen />}
+          {tab === 'stats' && <Stats />}
+          {tab === 'accounts' && <Accounts />}
+        </main>
+        {!top && (
+          <nav className="tabbar" aria-label="Разделы">
+            <div className="tabbar-inner">
+              {TABS.slice(0, 2).map((t) => (
+                <button key={t.id} className={`tab${tab === t.id ? ' on' : ''}`} onClick={() => nav.setTab(t.id)} aria-current={tab === t.id}>
+                  <Icon name={t.icon} />
+                  {t.label}
+                </button>
+              ))}
+              <div className="fab-wrap">
+                <button className="fab" onClick={() => nav.push({ kind: 'trade-edit' })} aria-label="Новая сделка">
+                  <Icon name="plus" size={28} stroke={2.4} />
+                </button>
+              </div>
+              {TABS.slice(2).map((t) => (
+                <button key={t.id} className={`tab${tab === t.id ? ' on' : ''}`} onClick={() => nav.setTab(t.id)} aria-current={tab === t.id}>
+                  <Icon name={t.icon} />
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </nav>
+        )}
+        {top && (
+          <Overlay key={layers.length + top.kind}>
+            {top.kind === 'trade-edit' && <TradeEditor key={top.id ?? 'new'} id={top.id} />}
+            {top.kind === 'trade-view' && <TradeDetail id={top.id} />}
+            {top.kind === 'account-edit' && <AccountEditor id={top.id} template={top.template} />}
+            {top.kind === 'account-view' && <AccountDetail id={top.id} />}
+            {top.kind === 'settings' && <Settings />}
+          </Overlay>
+        )}
+        {s.toast && <div className="toast" role="status">{s.toast.text}</div>}
+      </NavCtx.Provider>
+    </JournalCtx.Provider>
   );
 }

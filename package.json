@@ -1,12 +1,12 @@
 {
-  "name": "onyx-trading-journal",
+  "name": "onyx-prop-journal",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:single": "tsc -b && vite build --mode single",
+    "build:single": "tsc -b && vite build --mode single && node scripts/artifact.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc -b"

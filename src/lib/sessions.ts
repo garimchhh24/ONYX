@@ -1,10 +1,15 @@
 import type { SessionDef } from '../types';
-import { parseHHMM, zonedParts } from './time';
+import { EXCHANGE_TZ, parseHHMM, zonedParts } from './time';
 
+/** Futures day split by New York time (DST handled by the timezone). */
 export const DEFAULT_SESSIONS: SessionDef[] = [
-  { id: 'asia', name: 'Азия', timeZone: 'Asia/Tokyo', start: '09:00', end: '18:00' },
-  { id: 'london', name: 'Лондон', timeZone: 'Europe/London', start: '08:00', end: '17:00' },
-  { id: 'newyork', name: 'Нью-Йорк', timeZone: 'America/New_York', start: '08:00', end: '17:00' },
+  { id: 'asia', name: 'Азия', timeZone: EXCHANGE_TZ, start: '18:00', end: '03:00' },
+  { id: 'london', name: 'Лондон', timeZone: EXCHANGE_TZ, start: '03:00', end: '08:30' },
+  { id: 'premarket', name: 'Премаркет', timeZone: EXCHANGE_TZ, start: '08:30', end: '09:30' },
+  { id: 'nyopen', name: 'NY открытие', timeZone: EXCHANGE_TZ, start: '09:30', end: '11:00' },
+  { id: 'nylunch', name: 'NY ланч', timeZone: EXCHANGE_TZ, start: '11:00', end: '13:30' },
+  { id: 'nyclose', name: 'NY закрытие', timeZone: EXCHANGE_TZ, start: '13:30', end: '16:00' },
+  { id: 'after', name: 'После закрытия', timeZone: EXCHANGE_TZ, start: '16:00', end: '18:00' },
 ];
 
 export const OFF_SESSION = 'Вне сессий';
@@ -19,12 +24,11 @@ export function inSession(date: Date | string, s: SessionDef): boolean {
   return start < end ? t >= start && t < end : t >= start || t < end; // wraps midnight
 }
 
-/** All sessions active at the instant, in definition order. */
 export function detectSessions(date: Date | string, sessions: SessionDef[]): SessionDef[] {
   return sessions.filter((s) => inSession(date, s));
 }
 
-/** Human label: single session, overlap ("Лондон + Нью-Йорк") or off-session. */
+/** Session label; overlapping custom sessions are joined ("Лондон + NY"). */
 export function sessionLabel(date: Date | string, sessions: SessionDef[]): string {
   const hit = detectSessions(date, sessions);
   return hit.length ? hit.map((s) => s.name).join(' + ') : OFF_SESSION;
