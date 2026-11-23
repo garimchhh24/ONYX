@@ -116,7 +116,7 @@ npm run dev                     # http://localhost:3000
 
 1. Run `npm run vapid` and put the keys in the environment.
 2. Set `SUPABASE_SERVICE_ROLE_KEY` and `CRON_SECRET`.
-3. Call `GET /api/cron/reminders` with `Authorization: Bearer $CRON_SECRET` every 15 minutes. `vercel.json` includes a Vercel Cron entry (sub-daily schedules need a paid Vercel plan). Alternatives are Supabase `pg_cron` + `pg_net`, GitHub Actions or any uptime pinger.
+3. Call `GET /api/cron/reminders` with `Authorization: Bearer $CRON_SECRET` every 15–30 minutes. Free options: [cron-job.org](https://cron-job.org) or Supabase `pg_cron` + `pg_net`. On a paid Vercel plan you can add a `vercel.json` with `{"crons": [{"path": "/api/cron/reminders", "schedule": "*/15 * * * *"}]}`. Vercel's free Hobby plan only allows daily crons and rejects the deployment otherwise, so no `vercel.json` ships by default.
 
 The job checks each subscribed user's local time and sends at most one reminder per day. It only sends when today has unjournaled trades, or when no trades and no “no-trade day” mark exist on a weekday.
 
