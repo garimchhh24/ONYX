@@ -135,7 +135,7 @@ function BottomNav() {
 
 function MobileTopBar() {
   return (
-    <header className="sticky top-0 z-30 border-b border-white/[0.04] bg-[rgba(11,11,15,0.75)] pt-[var(--safe-top)] backdrop-blur-2xl md:hidden">
+    <header className="mobile-topbar sticky top-0 z-30 border-b border-white/[0.04] bg-[rgba(11,11,15,0.75)] pt-[var(--safe-top)] backdrop-blur-2xl md:hidden">
       <div className="flex h-12 items-center justify-between px-4">
         <Link href="/" className="flex items-center gap-2.5" aria-label="CADENCE home">
           <Symbol size={26} />

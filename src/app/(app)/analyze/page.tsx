@@ -20,6 +20,7 @@ import { isJournalComplete } from '@/lib/domain/questionnaire';
 import { localTimeZone } from '@/lib/domain/time';
 import { validateTrade } from '@/lib/domain/validate';
 import { useServerConfig } from '@/lib/hooks/useServerConfig';
+import { isArtifactRuntime } from '@/lib/runtime';
 import type { JournalAnswers, Trade } from '@/lib/types';
 
 type Step = 'upload' | 'analyzing' | 'confirm' | 'journal' | 'saved';
@@ -339,7 +340,12 @@ export default function AnalyzePage() {
       <PageHeader eyebrow="Step 1 of 3 · Capture" title="AI screenshot analysis" subtitle="TradingView, Lucid or your trading platform — up to 6 screenshots of one trade." />
       {cfg && !cfg.ai && (
         <Notice tone="warn" icon={<TriangleAlert className="size-4 text-warn" />} className="mb-5" title="AI analysis isn’t available on this deployment" action={<Link href="/journal/new"><Button size="sm">Manual entry</Button></Link>}>
-          {cfg.supabase ? 'The server has no ANTHROPIC_API_KEY.' : 'AI requires sign-in (Supabase) plus ANTHROPIC_API_KEY, or CADENCE_AI_ALLOW_ANONYMOUS=true on a private deployment.'} You can still attach screenshots and enter the trade manually.
+          {isArtifactRuntime
+            ? 'Open this page on claude.ai while signed in to analyze screenshots with Claude.'
+            : cfg.supabase
+              ? 'The server has no ANTHROPIC_API_KEY.'
+              : 'AI requires sign-in (Supabase) plus ANTHROPIC_API_KEY, or CADENCE_AI_ALLOW_ANONYMOUS=true on a private deployment.'}{' '}
+          You can still attach screenshots and enter the trade manually.
         </Notice>
       )}
       {error && (
@@ -478,6 +484,7 @@ export default function AnalyzePage() {
                 <li>• Setup, timeframe, bias and structure</li>
                 <li>• Liquidity sweeps, FVGs, order blocks, BOS/CHoCH…</li>
               </ul>
+              {isArtifactRuntime && cfg?.ai && <p className="mt-4 text-[12px] leading-relaxed text-faint">Runs on your Claude account. Claude asks for permission the first time, and analysis usually takes under a minute.</p>}
               <p className="mt-4 text-[12px] leading-relaxed text-faint">Every value gets a confidence level. Anything uncertain is flagged for you to confirm — nothing missing is ever invented.</p>
               {accounts.length > 0 && (
                 <div className="mt-5">
@@ -503,7 +510,7 @@ export default function AnalyzePage() {
                     Enter manually with these screenshots
                   </Button>
                 )}
-                {shots.length === 0 && (
+                {shots.length === 0 && !isArtifactRuntime && (
                   <button type="button" onClick={async () => {
                     try {
                       const items = await navigator.clipboard.read();

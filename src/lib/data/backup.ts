@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { db, SYNCED_TABLES, type SyncedTableName } from './db';
 import { base64ToBlob, blobToBase64 } from './images';
 import { sync } from './sync';
+import { isArtifactRuntime, useCapability } from '../runtime';
 
 /** Full JSON backup of the journal (optionally with screenshots) and a merge-restore. */
 
@@ -98,7 +99,24 @@ export async function restoreBackup(file: Blob, userId: string | null): Promise<
   return res;
 }
 
-export function downloadBlob(blob: Blob, filename: string) {
+interface DownloadsCapability {
+  save(req: { filename: string; data: Blob | string }): Promise<{ status: string }>;
+}
+
+/** Save a generated file. In the claude.ai preview this asks the viewer to confirm the download. */
+export async function downloadBlob(blob: Blob, filename: string): Promise<void> {
+  if (isArtifactRuntime) {
+    const downloads = await useCapability<DownloadsCapability>('downloads');
+    if (!downloads) throw new Error('Downloads aren’t available in this view.');
+    try {
+      await downloads.save({ filename, data: blob });
+    } catch (e) {
+      const code = (e as { code?: string })?.code;
+      if (code === 'declined') return;
+      throw new Error(code === 'rate_limited' ? 'A download is already waiting for your confirmation.' : 'The file couldn’t be saved in this view.');
+    }
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;

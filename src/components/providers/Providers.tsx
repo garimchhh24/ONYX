@@ -3,11 +3,12 @@
 import { MotionConfig } from 'motion/react';
 import { useEffect, type ReactNode } from 'react';
 import { AuthProvider } from '@/lib/auth/AuthProvider';
+import { isArtifactRuntime } from '@/lib/runtime';
 import { ToastProvider } from '../ui/overlay';
 
 function ServiceWorker() {
   useEffect(() => {
-    if (!('serviceWorker' in navigator)) return;
+    if (isArtifactRuntime || !('serviceWorker' in navigator)) return;
     if (process.env.NODE_ENV !== 'production' && !process.env.NEXT_PUBLIC_SW_DEV) return;
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => undefined);
   }, []);

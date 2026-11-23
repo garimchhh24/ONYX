@@ -5,6 +5,9 @@ import { AppIcon, Lockup, Symbol, Tagline, Wordmark } from '@/components/brand/L
 import { PageHeader } from '@/components/shell/AppShell';
 import { Card } from '@/components/ui/core';
 import { Item, Stagger } from '@/components/ui/motion';
+import { useToast } from '@/components/ui/overlay';
+import { appIconSvg, lockupSvg, symbolSvg, wordmarkSvg, type IconVariant } from '@/lib/brand/geometry';
+import { downloadBlob } from '@/lib/data/backup';
 
 const PALETTE = [
   { name: 'Obsidian Black', hex: '#0B0B0F' },
@@ -15,27 +18,37 @@ const PALETTE = [
   { name: 'White', hex: '#FFFFFF' },
 ];
 
-const ICONS = [
-  { file: 'cadence-app-icon.svg', label: 'Dark (primary)' },
-  { file: 'cadence-app-icon-light.svg', label: 'Light' },
-  { file: 'cadence-app-icon-mono.svg', label: 'Monochrome' },
-  { file: 'cadence-app-icon-violet.svg', label: 'Violet' },
-  { file: 'cadence-app-icon-outline.svg', label: 'Outline' },
+const ICONS: { variant: IconVariant; file: string; label: string }[] = [
+  { variant: 'dark', file: 'cadence-app-icon.svg', label: 'Dark (primary)' },
+  { variant: 'light', file: 'cadence-app-icon-light.svg', label: 'Light' },
+  { variant: 'mono', file: 'cadence-app-icon-mono.svg', label: 'Monochrome' },
+  { variant: 'violet', file: 'cadence-app-icon-violet.svg', label: 'Violet' },
+  { variant: 'outline', file: 'cadence-app-icon-outline.svg', label: 'Outline' },
 ];
 
-const FILES = [
-  'cadence-logo.svg',
-  'cadence-logo-light.svg',
-  'cadence-symbol.svg',
-  'cadence-symbol-light.svg',
-  'cadence-symbol-mono.svg',
-  'cadence-symbol-mono-black.svg',
-  'cadence-symbol-small.svg',
-  'cadence-wordmark.svg',
-  'cadence-wordmark-dark.svg',
-];
+/** Every vector asset, generated from the logo geometry (no static files needed). */
+const FILES: Record<string, () => string> = {
+  'cadence-logo.svg': () => lockupSvg('dark'),
+  'cadence-logo-light.svg': () => lockupSvg('light'),
+  'cadence-symbol.svg': () => symbolSvg('dark'),
+  'cadence-symbol-light.svg': () => symbolSvg('light'),
+  'cadence-symbol-mono.svg': () => symbolSvg('mono', { color: '#FFFFFF' }),
+  'cadence-symbol-mono-black.svg': () => symbolSvg('mono', { color: '#0B0B0F' }),
+  'cadence-symbol-small.svg': () => symbolSvg('flat'),
+  'cadence-wordmark.svg': () => wordmarkSvg('chrome'),
+  'cadence-wordmark-dark.svg': () => wordmarkSvg('dark'),
+  ...Object.fromEntries(ICONS.map((i) => [i.file, () => appIconSvg(i.variant)])),
+};
 
 export default function BrandPage() {
+  const toast = useToast();
+  const save = async (file: string) => {
+    try {
+      await downloadBlob(new Blob([FILES[file]() + '\n'], { type: 'image/svg+xml' }), file);
+    } catch (e) {
+      toast({ tone: 'error', title: 'Download failed', body: e instanceof Error ? e.message : undefined });
+    }
+  };
   return (
     <>
       <PageHeader eyebrow="Identity" title="CADENCE brand" subtitle="Discipline · Precision · Consistency · Performance" />
@@ -78,8 +91,12 @@ export default function BrandPage() {
             <div className="flex flex-wrap gap-6">
               {ICONS.map((i) => (
                 <div key={i.file} className="flex flex-col items-center gap-2">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={`/brand/${i.file}`} alt={i.label} className="size-24 rounded-[22px] shadow-[0_10px_30px_-10px_rgba(138,43,226,0.5)]" />
+                  <div
+                    role="img"
+                    aria-label={`${i.label} app icon`}
+                    className="size-24 overflow-hidden rounded-[22px] shadow-[0_10px_30px_-10px_rgba(138,43,226,0.5)] [&>svg]:size-full"
+                    dangerouslySetInnerHTML={{ __html: appIconSvg(i.variant, 192) }}
+                  />
                   <span className="text-[12px] text-mute">{i.label}</span>
                 </div>
               ))}
@@ -135,10 +152,15 @@ export default function BrandPage() {
           <Card className="p-6">
             <div className="eyebrow mb-4">Download vector assets</div>
             <div className="flex flex-wrap gap-2">
-              {[...FILES, ...ICONS.map((i) => i.file)].map((f) => (
-                <a key={f} href={`/brand/${f}`} download className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[12px] text-mute transition hover:border-violet/40 hover:text-fg">
+              {Object.keys(FILES).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => save(f)}
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/10 px-3 py-1.5 text-[12px] text-mute transition hover:border-violet/40 hover:text-fg"
+                >
                   <Download className="size-3" /> {f}
-                </a>
+                </button>
               ))}
             </div>
           </Card>

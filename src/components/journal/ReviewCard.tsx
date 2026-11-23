@@ -7,6 +7,7 @@ import { AiClientError, requestReview } from '@/lib/ai/client';
 import { patchTrade } from '@/lib/data/repo';
 import type { ETrade } from '@/lib/domain/calc';
 import { useServerConfig } from '@/lib/hooks/useServerConfig';
+import { isArtifactRuntime } from '@/lib/runtime';
 import type { AiReview } from '@/lib/types';
 import { Button, Card, cn, Notice } from '../ui/core';
 import { LogoLoader } from '../brand/Logo';
@@ -131,10 +132,12 @@ export function ReviewCard({ trade, autoGenerate }: { trade: ETrade; autoGenerat
       ) : !trade.journal ? (
         <p className="text-[13.5px] text-mute">Complete the journal check-in first — the review is built from your answers and the trade data.</p>
       ) : cfg && !cfg.ai ? (
-        <Notice tone="neutral" icon={<TriangleAlert className="size-4 text-warn" />} title="AI is not available on this deployment">
-          {cfg.aiAccess === 'disabled' && cfg.supabase === false
-            ? 'Add ANTHROPIC_API_KEY and sign-in (Supabase) — or set CADENCE_AI_ALLOW_ANONYMOUS=true for a private deployment.'
-            : 'Add ANTHROPIC_API_KEY to the server environment to enable AI reviews.'}
+        <Notice tone="neutral" icon={<TriangleAlert className="size-4 text-warn" />} title={isArtifactRuntime ? 'AI isn’t available in this view' : 'AI is not available on this deployment'}>
+          {isArtifactRuntime
+            ? 'Open this page on claude.ai while signed in to get AI reviews.'
+            : cfg.aiAccess === 'disabled' && cfg.supabase === false
+              ? 'Add ANTHROPIC_API_KEY and sign-in (Supabase) — or set CADENCE_AI_ALLOW_ANONYMOUS=true for a private deployment.'
+              : 'Add ANTHROPIC_API_KEY to the server environment to enable AI reviews.'}
         </Notice>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-3">

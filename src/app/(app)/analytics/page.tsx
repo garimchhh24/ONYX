@@ -40,6 +40,7 @@ import {
 import { formatDuration } from '@/lib/domain/time';
 import { useServerConfig } from '@/lib/hooks/useServerConfig';
 import { useToday } from '@/lib/hooks/useToday';
+import { isArtifactRuntime } from '@/lib/runtime';
 import type { AiReport, CoachPattern } from '@/lib/types';
 
 type Tab = 'performance' | 'timing' | 'psychology' | 'coach';
@@ -455,7 +456,7 @@ function CoachPanel({ trades }: { trades: ReturnType<typeof applyFilter> }) {
         ) : !result.ready ? (
           <p className="text-[13.5px] text-mute">The AI coach unlocks at {MIN_TRADES} closed trades so its conclusions rest on real evidence.</p>
         ) : cfg && !cfg.ai ? (
-          <p className="text-[13.5px] text-mute">AI is not configured on this deployment. The statistical patterns above work without it.</p>
+          <p className="text-[13.5px] text-mute">{isArtifactRuntime ? 'Open this page on claude.ai while signed in to generate a coach report.' : 'AI is not configured on this deployment.'} The statistical patterns above work without it.</p>
         ) : (
           <p className="flex items-center gap-2 text-[13.5px] text-mute">
             <Brain className="size-4" /> Get a written analysis of recurring patterns with concrete rules to improve.
