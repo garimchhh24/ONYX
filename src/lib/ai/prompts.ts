@@ -1,4 +1,4 @@
-import 'server-only';
+// Prompts are shared by the server routes and the claude.ai preview (they hold no secrets).
 
 export const EXTRACTION_SYSTEM = `You are CADENCE's trade-screenshot analyst for a futures trading journal (CME futures such as ES, NQ, MES, MNQ, RTY, M2K, YM, MYM, CL, GC). The trader is funded through the prop firm Lucid Trading and uploads screenshots from TradingView or from their trading platform (order/fill tables, position panels, account P&L, DOM).
 
@@ -45,3 +45,37 @@ Rules for statistical honesty:
 - If the data is thin, say so in data_gaps and keep strengths/weaknesses short or empty. An empty list is better than a weak claim.
 - Suggestions must be concrete rules the trader can follow (limits, filters, checklists), tied to the evidence.
 - Keep the summary to 2-3 sentences.`;
+
+// ───────── JSON shapes for runtimes without structured outputs (claude.ai preview) ─────────
+
+const FIELD = '{"value": <see type>, "confidence": <0..1>, "source": "visible" | "inferred" | "missing", "evidence": "<short note>", "image": <1-based screenshot number or null>}';
+
+export const EXTRACTION_JSON_SHAPE = `Reply with ONLY one JSON object, no other text, of exactly this shape:
+{
+  "is_trade_screenshot": true,
+  "platform": "tradingview" | "tradovate" | "ninjatrader" | "rithmic" | "projectx" | "lucid" | "other" | "unknown",
+  "instrument": F, "contract": F, "direction": F,
+  "entry_price": F, "exit_price": F, "stop_loss": F, "take_profit": F, "contracts": F,
+  "entry_time": F, "exit_time": F, "chart_timezone": F,
+  "gross_pnl": F, "net_pnl": F, "commission": F, "risk_amount": F, "realized_r": F,
+  "trading_session": F, "setup_type": F, "timeframe": F, "market_bias": F, "market_structure": F,
+  "concepts": [{"concept": "liquidity_sweep" | "fvg" | "order_block" | "displacement" | "bos" | "choch" | "premium" | "discount" | "ote" | "breaker" | "smt" | "ifvg" | "killzone" | "equal_highs_lows", "confidence": <0..1>, "evidence": "<short>", "image": <number or null>}],
+  "other_concepts": ["<string>"],
+  "observations": ["<fact directly visible>"],
+  "assumptions": ["<anything inferred>"],
+  "conflicts": ["<contradiction between screenshots>"],
+  "summary": "<two sentences>"
+}
+Every F is ${FIELD}.
+Value types: numbers (plain JSON numbers, no separators or currency) for entry_price, exit_price, stop_loss, take_profit, contracts, gross_pnl, net_pnl, commission, risk_amount, realized_r. Strings for everything else: instrument exactly as shown (e.g. "NQ1!", "MNQZ2026"), contract code, direction "long" or "short", times as "YYYY-MM-DD HH:MM" or "HH:MM" (24h, chart time zone), chart_timezone as shown, timeframe as shown ("1", "5", "15", "1h", "4h", "D"), market_bias "bullish" | "bearish" | "neutral".
+When a value is not on the screenshots use {"value": null, "confidence": 0, "source": "missing", "evidence": "", "image": null}.`;
+
+export const REVIEW_JSON_SHAPE = `Reply with ONLY one JSON object, no other text:
+{"headline": "<one sentence>", "score": <0-100 or null>, "went_well": ["<point>"], "improve": ["<point>"], "psychology": "<text>", "rules": "<text>", "lesson": "<text>", "next_action": "<one concrete action>"}`;
+
+export const COACH_JSON_SHAPE = `Reply with ONLY one JSON object, no other text:
+{"summary": "<2-3 sentences>",
+ "strengths": [{"title": "<text>", "evidence": "<numbers from the data>", "sample_size": <integer>, "confidence": "low" | "medium" | "high", "impact": "positive", "suggestion": "<concrete rule>"}],
+ "weaknesses": [{"title": "<text>", "evidence": "<numbers>", "sample_size": <integer>, "confidence": "low" | "medium" | "high", "impact": "negative", "suggestion": "<concrete rule>"}],
+ "focus": ["<up to three focus points>"],
+ "data_gaps": ["<text>"]}`;

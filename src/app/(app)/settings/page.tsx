@@ -16,6 +16,7 @@ import { money } from '@/lib/domain/format';
 import { CORE_SYMBOLS } from '@/lib/domain/instruments';
 import { isValidTimeZone, localTimeZone } from '@/lib/domain/time';
 import { useServerConfig } from '@/lib/hooks/useServerConfig';
+import { isArtifactRuntime } from '@/lib/runtime';
 import { useSyncState } from '@/lib/hooks/useSync';
 import { currentSubscription, pushSupport, requestPermission, sendTestPush, showLocalNotification, subscribePush, unsubscribePush, type PushSupport } from '@/lib/push/client';
 import type { Instrument } from '@/lib/types';
@@ -120,6 +121,14 @@ function ReminderSection() {
   };
 
   const pushPossible = !!(cfg?.push && user && support?.push && support.serviceWorker && !support.needsInstall);
+
+  if (isArtifactRuntime) {
+    return (
+      <Section id="reminders" icon={<Bell className="size-4" />} title="Evening reminder" description="A nudge to journal at 8:30 PM — only when today’s journal is incomplete.">
+        <Notice tone="neutral">Reminders need the installed CADENCE app, so they’re off in this claude.ai preview. Your reminder time is still saved: {r.time}.</Notice>
+      </Section>
+    );
+  }
 
   return (
     <Section id="reminders" icon={<Bell className="size-4" />} title="Evening reminder" description="A nudge to journal — only when today’s journal is incomplete.">
@@ -234,7 +243,9 @@ function InstallSection() {
       <div className="flex items-center gap-5">
         <AppIcon size={72} />
         <div className="text-[13px] text-mute">
-          {support?.standalone ? (
+          {isArtifactRuntime ? (
+            <span>This is a preview hosted on claude.ai. Deploy CADENCE (see the README) to install it on your Home Screen.</span>
+          ) : support?.standalone ? (
             <span className="text-pos">Installed — you’re running CADENCE as an app.</span>
           ) : support?.ios ? (
             <ol className="list-decimal space-y-1 pl-4">
@@ -274,6 +285,11 @@ function AiSection() {
     <Section icon={<Bot className="size-4" />} title="AI" description="Screenshot analysis, trade reviews and the performance coach.">
       {!cfg ? (
         <div className="skeleton h-12" />
+      ) : cfg.ai && isArtifactRuntime ? (
+        <div className="space-y-2 text-[13px]">
+          <Badge tone="pos">Available</Badge>
+          <p className="text-mute">In this preview, AI runs on your own Claude account. Claude asks for your permission the first time a feature uses it.</p>
+        </div>
       ) : cfg.ai ? (
         <div className="space-y-2 text-[13px]">
           <div className="flex items-center gap-2">
@@ -283,6 +299,8 @@ function AiSection() {
           </div>
           <p className="text-mute">Requests run on the CADENCE server; the API key is never sent to your device. Coach reports use aggregated statistics only.</p>
         </div>
+      ) : isArtifactRuntime ? (
+        <Notice tone="warn" title="Not available in this view">Open the page on claude.ai while signed in to use AI features.</Notice>
       ) : (
         <Notice tone="warn" title="Not configured">
           {cfg.aiAccess === 'disabled' && !cfg.supabase ? 'Set ANTHROPIC_API_KEY plus Supabase sign-in, or CADENCE_AI_ALLOW_ANONYMOUS=true for a private single-user deployment.' : 'Set ANTHROPIC_API_KEY on the server to enable AI features.'}
@@ -346,7 +364,9 @@ function SyncSection() {
       ) : (
         <div className="space-y-2 text-[13px] text-mute">
           <p>
-            Data is stored in this browser (IndexedDB) and works offline. Use <span className="text-fg">Backup</span> below to keep a copy. To enable accounts and sync, configure Supabase (see README).
+            {isArtifactRuntime
+              ? 'Preview: your entries are stored in this browser only. Use Backup below to keep a copy you can restore into your own CADENCE deployment.'
+              : 'Data is stored in this browser (IndexedDB) and works offline. Use Backup below to keep a copy. To enable accounts and sync, configure Supabase (see README).'}
           </p>
         </div>
       )}
@@ -498,7 +518,14 @@ function DataSection() {
         <Button
           icon={<FileSpreadsheet className="size-4" />}
           disabled={!trades?.length}
-          onClick={() => trades && accounts && downloadBlob(new Blob([tradesToCsv(trades, accounts)], { type: 'text/csv;charset=utf-8' }), `cadence-trades-${stamp}.csv`)}
+          onClick={async () => {
+            if (!trades || !accounts) return;
+            try {
+              await downloadBlob(new Blob([tradesToCsv(trades, accounts)], { type: 'text/csv;charset=utf-8' }), `cadence-trades-${stamp}.csv`);
+            } catch (e) {
+              toast({ tone: 'error', title: 'Export failed', body: e instanceof Error ? e.message : undefined });
+            }
+          }}
         >
           Export CSV
         </Button>
@@ -508,7 +535,9 @@ function DataSection() {
           onClick={async () => {
             setBusy('backup');
             try {
-              downloadBlob(await exportBackup(true), `cadence-backup-${stamp}.json`);
+              await downloadBlob(await exportBackup(true), `cadence-backup-${stamp}.json`);
+            } catch (e) {
+              toast({ tone: 'error', title: 'Backup failed', body: e instanceof Error ? e.message : undefined });
             } finally {
               setBusy(null);
             }

@@ -4,7 +4,9 @@ import { blobToBase64 } from '../data/images';
 import { coachPayload } from '../domain/coach';
 import type { ETrade } from '../domain/calc';
 import { labelOf } from '../domain/questionnaire';
+import { isArtifactRuntime } from '../runtime';
 import { accessToken } from '../supabase/browser';
+import { analyzeViaSample, coachViaSample, reviewViaSample, SampleCallError } from './sample-runtime';
 import type { AiReview, CoachReport, JournalAnswers } from '../types';
 import type { ExtractionResult, ReviewRequestBody } from './schema';
 
@@ -39,6 +41,18 @@ export async function analyzeScreenshots(
   opts: { timezone: string; symbols: string[]; signal?: AbortSignal },
   onEvent: (e: AnalyzeEvent) => void,
 ): Promise<{ extraction: ExtractionResult; model: string }> {
+  if (isArtifactRuntime) {
+    try {
+      const r = await analyzeViaSample(images, opts, (stage, chars) => {
+        onEvent({ type: 'stage', stage });
+        if (chars !== undefined) onEvent({ type: 'progress', phase: 'writing', chars });
+      });
+      onEvent({ type: 'stage', stage: 'done' });
+      return r;
+    } catch (e) {
+      throw e instanceof SampleCallError ? new AiClientError(e.message, e.code) : e;
+    }
+  }
   onEvent({ type: 'stage', stage: 'preparing' });
   const payload = await Promise.all(images.map(async (b) => ({ media_type: (b.type || 'image/jpeg') as 'image/jpeg', data: await blobToBase64(b) })));
   onEvent({ type: 'stage', stage: 'uploading' });
@@ -121,6 +135,13 @@ export function reviewBody(t: ETrade, j: JournalAnswers): ReviewRequestBody {
 }
 
 export async function requestReview(t: ETrade, j: JournalAnswers): Promise<AiReview> {
+  if (isArtifactRuntime) {
+    try {
+      return { ...(await reviewViaSample(reviewBody(t, j))), generated_at: new Date().toISOString() };
+    } catch (e) {
+      throw e instanceof SampleCallError ? new AiClientError(e.message, e.code) : e;
+    }
+  }
   const res = await fetch('/api/ai/review', { method: 'POST', headers: await headers(), body: JSON.stringify(reviewBody(t, j)) });
   if (!res.ok) throw await failure(res);
   const { review, model } = (await res.json()) as { review: Omit<AiReview, 'generated_at' | 'model'>; model: string };
@@ -128,6 +149,13 @@ export async function requestReview(t: ETrade, j: JournalAnswers): Promise<AiRev
 }
 
 export async function requestCoach(trades: ETrade[]): Promise<{ report: CoachReport; model: string; payload: ReturnType<typeof coachPayload> }> {
+  if (isArtifactRuntime) {
+    try {
+      return await coachViaSample(trades);
+    } catch (e) {
+      throw e instanceof SampleCallError ? new AiClientError(e.message, e.code) : e;
+    }
+  }
   const payload = coachPayload(trades);
   const res = await fetch('/api/ai/coach', { method: 'POST', headers: await headers(), body: JSON.stringify({ payload }) });
   if (!res.ok) throw await failure(res);

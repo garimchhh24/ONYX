@@ -55,6 +55,7 @@ export function TradeRow({ t, accountName, shots = 0, showDate }: { t: ETrade; a
         <div className="flex items-center gap-2">
           <span className="font-display text-[15px] font-semibold tracking-tight">{t.symbol}</span>
           <span className="text-[12px] text-faint">×{t.contracts}</span>
+          {t.tags.includes('example') && <Badge className="py-0 text-[10px]">Example</Badge>}
           {t.setup && <span className="hidden truncate text-[12px] text-mute sm:inline">· {t.setup}</span>}
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-[12px] text-faint">

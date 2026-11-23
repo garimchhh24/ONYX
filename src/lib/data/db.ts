@@ -25,7 +25,7 @@ export class CadenceDB extends Dexie {
   meta!: Table<MetaRow, string>;
 
   constructor(name = 'cadence') {
-    super(name);
+    super(name, deps ?? undefined);
     this.version(1).stores({
       trades: 'id, _dirty, trading_day, account_id, updated_at, user_id',
       accounts: 'id, _dirty, user_id',
@@ -40,6 +40,13 @@ export class CadenceDB extends Dexie {
 }
 
 let instance: CadenceDB | null = null;
+let deps: { indexedDB: IDBFactory; IDBKeyRange: typeof IDBKeyRange } | null = null;
+
+/** Use another IndexedDB implementation (e.g. in-memory). Must run before the first db() call. */
+export function setDatabaseImplementation(impl: { indexedDB: IDBFactory; IDBKeyRange: typeof IDBKeyRange }) {
+  deps = impl;
+  instance = null;
+}
 
 export function db(): CadenceDB {
   if (!instance) instance = new CadenceDB();
